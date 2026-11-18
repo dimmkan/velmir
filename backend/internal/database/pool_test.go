@@ -31,6 +31,9 @@ func TestNewPoolsWithSeparateTargets(t *testing.T) {
 	if admin == target {
 		t.Fatal("admin and target pools are the same")
 	}
+	if got := target.Config().ConnConfig.RuntimeParams["default_transaction_read_only"]; got != "on" {
+		t.Errorf("target default_transaction_read_only = %q, want on", got)
+	}
 }
 
 func TestNewPoolsRejectsInvalidAdminURL(t *testing.T) {

@@ -14,6 +14,7 @@ import (
 	"velmir/backend/internal/config"
 	"velmir/backend/internal/database"
 	"velmir/backend/internal/httpapi"
+	"velmir/backend/internal/introspection"
 )
 
 func main() {
@@ -38,9 +39,9 @@ func run() error {
 		defer targetDatabase.Close()
 	}
 
-	router := httpapi.NewRouter(adminDatabase, nil)
+	router := httpapi.NewRouter(adminDatabase, nil, nil)
 	if targetDatabase != nil {
-		router = httpapi.NewRouter(adminDatabase, targetDatabase)
+		router = httpapi.NewRouter(adminDatabase, targetDatabase, introspection.New(targetDatabase))
 	}
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,

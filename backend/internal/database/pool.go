@@ -17,7 +17,14 @@ func NewPools(ctx context.Context, adminDatabaseURL, targetDatabaseURL string) (
 		return admin, nil, nil
 	}
 
-	target, err = pgxpool.New(ctx, targetDatabaseURL)
+	targetConfig, err := pgxpool.ParseConfig(targetDatabaseURL)
+	if err != nil {
+		admin.Close()
+		return nil, nil, fmt.Errorf("parse target database configuration: %w", err)
+	}
+	targetConfig.ConnConfig.RuntimeParams["default_transaction_read_only"] = "on"
+
+	target, err = pgxpool.NewWithConfig(ctx, targetConfig)
 	if err != nil {
 		admin.Close()
 		return nil, nil, fmt.Errorf("create target database pool: %w", err)
