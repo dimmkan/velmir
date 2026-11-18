@@ -34,6 +34,20 @@ type ForeignKey struct {
 	ReferencedColumns []string `json:"referenced_columns"`
 }
 
+func (c Catalog) FindResource(schemaName, resourceName string) (Resource, bool) {
+	for _, schema := range c.Schemas {
+		if schema.Name != schemaName {
+			continue
+		}
+		for _, resource := range schema.Resources {
+			if resource.Name == resourceName {
+				return resource, true
+			}
+		}
+	}
+	return Resource{}, false
+}
+
 type objectRow struct {
 	Schema string
 	Name   string

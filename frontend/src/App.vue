@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import RecordsTable from './RecordsTable.vue'
 import { fetchReadiness, type DatabaseState, type ReadinessResponse } from './readiness'
 import {
   fetchSchema,
@@ -27,13 +28,24 @@ const databaseStateLabels: Record<DatabaseState, string> = {
 const selectedResource = computed<ResourceMetadata | null>(() => {
   for (const schema of catalog.value?.schemas ?? []) {
     for (const resource of schema.resources) {
-      if (`${schema.name}.${resource.name}` === selectedResourceKey.value) return resource
+      if (resourceKey(schema.name, resource.name) === selectedResourceKey.value) return resource
     }
   }
   return null
 })
 
-const selectedSchemaName = computed(() => selectedResourceKey.value.split('.')[0])
+const selectedSchemaName = computed(() => {
+  for (const schema of catalog.value?.schemas ?? []) {
+    if (schema.resources.some((resource) => resourceKey(schema.name, resource.name) === selectedResourceKey.value)) {
+      return schema.name
+    }
+  }
+  return ''
+})
+
+function resourceKey(schema: string, resource: string) {
+  return JSON.stringify([schema, resource])
+}
 
 function databaseStateLabel(state: DatabaseState | undefined) {
   if (viewState.value === 'loading') return 'Checking'
@@ -73,7 +85,9 @@ async function loadSchema() {
       schemaViewState.value = 'empty'
       return
     }
-    selectedResourceKey.value = `${firstSchema.name}.${firstSchema.resources[0].name}`
+    if (!restoreResourceFromURL()) {
+      selectResource(firstSchema.name, firstSchema.resources[0].name, false)
+    }
     schemaViewState.value = 'ready'
   } catch (error) {
     schemaViewState.value =
@@ -85,10 +99,38 @@ async function loadSchema() {
   }
 }
 
+function restoreResourceFromURL() {
+  const url = new URL(window.location.href)
+  const schema = url.searchParams.get('schema')
+  const resource = url.searchParams.get('resource')
+  if (!schema || !resource) return false
+  const exists = catalog.value?.schemas.some((item) =>
+    item.name === schema && item.resources.some((itemResource) => itemResource.name === resource),
+  )
+  if (!exists) return false
+  selectedResourceKey.value = resourceKey(schema, resource)
+  return true
+}
+
+function selectResource(schema: string, resource: string, push = true) {
+  const url = new URL(window.location.href)
+  url.searchParams.set('schema', schema)
+  url.searchParams.set('resource', resource)
+  if (push) {
+    for (const key of ['page', 'limit', 'sort', 'direction', 'search', 'search_column', 'filter']) {
+      url.searchParams.delete(key)
+    }
+  }
+  window.history[push ? 'pushState' : 'replaceState']({}, '', `${url.pathname}${url.search}${url.hash}`)
+  selectedResourceKey.value = resourceKey(schema, resource)
+}
+
 onMounted(() => {
+  window.addEventListener('popstate', restoreResourceFromURL)
   void loadReadiness()
   void loadSchema()
 })
+onBeforeUnmount(() => window.removeEventListener('popstate', restoreResourceFromURL))
 </script>
 
 <template>
@@ -97,7 +139,7 @@ onMounted(() => {
       <div class="brand">
         <p class="eyebrow">PostgreSQL admin panel</p>
         <h1>Velmir</h1>
-        <p>Read-only schema introspection</p>
+        <p>Read-only database records</p>
       </div>
 
       <div class="sidebar-content">
@@ -120,8 +162,8 @@ onMounted(() => {
               :key="resource.name"
               type="button"
               class="resource-link"
-              :class="{ active: selectedResourceKey === `${schema.name}.${resource.name}` }"
-              @click="selectedResourceKey = `${schema.name}.${resource.name}`"
+              :class="{ active: selectedResourceKey === resourceKey(schema.name, resource.name) }"
+              @click="selectResource(schema.name, resource.name)"
             >
               <span>{{ resource.name }}</span>
               <span class="resource-kind">{{ resource.kind }}</span>
@@ -163,77 +205,17 @@ onMounted(() => {
             <h2>{{ selectedResource.name }}</h2>
             <span class="kind-badge">{{ selectedResource.kind }}</span>
           </div>
-          <p>PostgreSQL metadata · read-only</p>
+          <p>Metadata-driven records · read-only</p>
         </header>
-
-        <section class="metadata-section" aria-labelledby="columns-title">
-          <h3 id="columns-title">Columns</h3>
-          <div class="table-wrapper">
-            <table>
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>PostgreSQL type</th>
-                  <th>Nullable</th>
-                  <th>Default</th>
-                  <th>Key</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="column in selectedResource.columns" :key="column.name">
-                  <td class="column-name">{{ column.name }}</td>
-                  <td><code>{{ column.data_type }}</code></td>
-                  <td>{{ column.nullable ? 'Yes' : 'No' }}</td>
-                  <td><code v-if="column.default !== null">{{ column.default }}</code><span v-else>—</span></td>
-                  <td>
-                    <span v-if="selectedResource.primary_key.includes(column.name)" class="key-badge">PK</span>
-                    <span v-else>—</span>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </section>
-
-        <section class="metadata-section compact-section" aria-labelledby="primary-key-title">
-          <h3 id="primary-key-title">Primary key</h3>
-          <div v-if="selectedResource.primary_key.length" class="key-list">
-            <code v-for="column in selectedResource.primary_key" :key="column">{{ column }}</code>
-          </div>
-          <p v-else class="muted">No primary key.</p>
-        </section>
-
-        <section class="metadata-section" aria-labelledby="foreign-keys-title">
-          <h3 id="foreign-keys-title">Foreign keys</h3>
-          <div v-if="selectedResource.foreign_keys.length" class="table-wrapper">
-            <table>
-              <thead>
-                <tr>
-                  <th>Constraint</th>
-                  <th>Columns</th>
-                  <th>References</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="foreignKey in selectedResource.foreign_keys" :key="foreignKey.name">
-                  <td class="column-name">{{ foreignKey.name }}</td>
-                  <td><code>{{ foreignKey.columns.join(', ') }}</code></td>
-                  <td>
-                    <code>
-                      {{ foreignKey.referenced_schema }}.{{ foreignKey.referenced_table }}
-                      ({{ foreignKey.referenced_columns.join(', ') }})
-                    </code>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <p v-else class="muted">No foreign keys.</p>
-        </section>
+        <RecordsTable
+          :backend-base-u-r-l="backendBaseURL"
+          :schema-name="selectedSchemaName"
+          :resource="selectedResource"
+        />
       </template>
 
       <section v-else class="empty-state">
-        <p class="eyebrow">Schema introspection</p>
+        <p class="eyebrow">Database records</p>
         <h2 v-if="schemaViewState === 'loading'">Loading metadata…</h2>
         <h2 v-else-if="schemaViewState === 'not_configured'">Target database is not configured</h2>
         <h2 v-else-if="schemaViewState === 'empty'">No resources found</h2>
