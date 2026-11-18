@@ -1,0 +1,21 @@
+services:
+  admin-db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: velmir
+      POSTGRES_PASSWORD: velmir_local_only
+      POSTGRES_DB: velmir_admin
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - admin-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U velmir -d velmir_admin"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  admin-db-data:
