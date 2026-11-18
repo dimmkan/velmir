@@ -1,3 +1,5 @@
+import { handleUnauthorized } from './auth'
+
 export interface SchemaResponse {
   schemas: SchemaMetadata[]
   write_enabled: boolean
@@ -111,10 +113,12 @@ function errorCode(value: unknown) {
 export async function fetchSchema(backendBaseURL: string, signal?: AbortSignal) {
   const response = await fetch(`${backendBaseURL}/api/schema`, {
     headers: { Accept: 'application/json' },
+    credentials: 'same-origin',
     signal,
   })
   const body: unknown = await response.json()
 
+  if (response.status === 401) handleUnauthorized()
   if (!response.ok) {
     throw new SchemaRequestError(errorCode(body))
   }

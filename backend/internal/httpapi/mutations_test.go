@@ -32,7 +32,7 @@ func TestMutationsTargetReadOnly(t *testing.T) {
 		httptest.NewRequest(http.MethodPatch, `/api/resources/public/items/records/%7B%22id%22%3A%221%22%7D`, strings.NewReader(`{"values":{"name":"x"}}`)),
 	} {
 		response := httptest.NewRecorder()
-		NewRouterWithWriter(nil, nil, recordsInspector(), nil, nil).ServeHTTP(response, request)
+		newTestRouterWithWriter(nil, nil, recordsInspector(), nil, nil).ServeHTTP(response, request)
 		if response.Code != http.StatusForbidden {
 			t.Errorf("status = %d, body = %s", response.Code, response.Body.String())
 		}
@@ -63,7 +63,7 @@ func TestCreateAndUpdateRecords(t *testing.T) {
 			return map[string]any{"id": "1", "name": "updated"}, nil
 		},
 	}
-	router := NewRouterWithWriter(nil, nil, recordsInspector(), nil, writer)
+	router := newTestRouterWithWriter(nil, nil, recordsInspector(), nil, writer)
 
 	createResponse := httptest.NewRecorder()
 	router.ServeHTTP(createResponse, httptest.NewRequest(http.MethodPost, "/api/resources/public/items/records", strings.NewReader(`{"values":{"name":"new"}}`)))
@@ -85,7 +85,7 @@ func TestMutationValidationAndFieldErrors(t *testing.T) {
 		},
 	}
 	response := httptest.NewRecorder()
-	NewRouterWithWriter(nil, nil, recordsInspector(), nil, writer).ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/resources/public/items/records", strings.NewReader(`{"values":{"name":"new"}}`)))
+	newTestRouterWithWriter(nil, nil, recordsInspector(), nil, writer).ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/resources/public/items/records", strings.NewReader(`{"values":{"name":"new"}}`)))
 	if response.Code != http.StatusConflict {
 		t.Fatalf("status = %d", response.Code)
 	}
@@ -98,7 +98,7 @@ func TestMutationValidationAndFieldErrors(t *testing.T) {
 	}
 
 	invalid := httptest.NewRecorder()
-	NewRouterWithWriter(nil, nil, recordsInspector(), nil, writer).ServeHTTP(invalid, httptest.NewRequest(http.MethodPost, "/api/resources/public/items/records", strings.NewReader(`{"values":{},"extra":true}`)))
+	newTestRouterWithWriter(nil, nil, recordsInspector(), nil, writer).ServeHTTP(invalid, httptest.NewRequest(http.MethodPost, "/api/resources/public/items/records", strings.NewReader(`{"values":{},"extra":true}`)))
 	if invalid.Code != http.StatusBadRequest {
 		t.Errorf("invalid body status = %d", invalid.Code)
 	}
@@ -111,7 +111,7 @@ func TestMutationFailureDoesNotLeakInternals(t *testing.T) {
 		},
 	}
 	response := httptest.NewRecorder()
-	NewRouterWithWriter(nil, nil, recordsInspector(), nil, writer).ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/resources/public/items/records", strings.NewReader(`{"values":{}}`)))
+	newTestRouterWithWriter(nil, nil, recordsInspector(), nil, writer).ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/resources/public/items/records", strings.NewReader(`{"values":{}}`)))
 	if response.Code != http.StatusInternalServerError || strings.Contains(response.Body.String(), "secret SQL") {
 		t.Errorf("response = %d %s", response.Code, response.Body.String())
 	}
@@ -120,7 +120,7 @@ func TestMutationFailureDoesNotLeakInternals(t *testing.T) {
 func TestSchemaReportsWriteEnabled(t *testing.T) {
 	writer := recordWriterFunc{}
 	response := httptest.NewRecorder()
-	NewRouterWithWriter(nil, nil, recordsInspector(), nil, writer).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/schema", nil))
+	newTestRouterWithWriter(nil, nil, recordsInspector(), nil, writer).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/schema", nil))
 	var body introspection.Catalog
 	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
 		t.Fatal(err)

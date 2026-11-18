@@ -27,7 +27,7 @@ func TestHealthz(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	response := httptest.NewRecorder()
 
-	NewRouter(nil, nil, nil).ServeHTTP(response, request)
+	newTestRouter(nil, nil, nil).ServeHTTP(response, request)
 
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
@@ -91,7 +91,7 @@ func TestReadyz(t *testing.T) {
 			request := httptest.NewRequest(http.MethodGet, "/readyz", nil)
 			response := httptest.NewRecorder()
 
-			NewRouter(tt.admin, tt.target, nil).ServeHTTP(response, request)
+			newTestRouter(tt.admin, tt.target, nil).ServeHTTP(response, request)
 
 			if response.Code != tt.wantHTTPStatus {
 				t.Fatalf("status = %d, want %d", response.Code, tt.wantHTTPStatus)
@@ -122,7 +122,7 @@ func TestSchema(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/api/schema", nil)
 	response := httptest.NewRecorder()
 
-	NewRouter(nil, nil, inspector).ServeHTTP(response, request)
+	newTestRouter(nil, nil, inspector).ServeHTTP(response, request)
 
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
@@ -140,7 +140,7 @@ func TestSchemaTargetNotConfigured(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/api/schema", nil)
 	response := httptest.NewRecorder()
 
-	NewRouter(nil, nil, nil).ServeHTTP(response, request)
+	newTestRouter(nil, nil, nil).ServeHTTP(response, request)
 
 	if response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusServiceUnavailable)
@@ -161,7 +161,7 @@ func TestSchemaIntrospectionFailure(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/api/schema", nil)
 	response := httptest.NewRecorder()
 
-	NewRouter(nil, nil, inspector).ServeHTTP(response, request)
+	newTestRouter(nil, nil, inspector).ServeHTTP(response, request)
 
 	if response.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusInternalServerError)

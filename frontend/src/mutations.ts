@@ -1,3 +1,4 @@
+import { getCSRFToken, handleUnauthorized } from './auth'
 import type { RecordRow } from './records'
 import type { ResourceMetadata } from './schema'
 
@@ -30,8 +31,9 @@ export async function createRecord(
   schema: string,
   resource: string,
   values: RecordValues,
+  csrfToken = getCSRFToken(),
 ): Promise<RecordRow> {
-  return sendMutation(backendBaseURL, schema, resource, values)
+  return sendMutation(backendBaseURL, schema, resource, values, undefined, csrfToken)
 }
 
 export async function updateRecord(
@@ -40,8 +42,9 @@ export async function updateRecord(
   resource: string,
   key: string,
   values: RecordValues,
+  csrfToken = getCSRFToken(),
 ): Promise<RecordRow> {
-  return sendMutation(backendBaseURL, schema, resource, values, key)
+  return sendMutation(backendBaseURL, schema, resource, values, key, csrfToken)
 }
 
 async function sendMutation(
@@ -49,16 +52,19 @@ async function sendMutation(
   schema: string,
   resource: string,
   values: RecordValues,
-  key?: string,
+  key: string | undefined,
+  csrfToken: string,
 ): Promise<RecordRow> {
   const path = `${backendBaseURL}/api/resources/${encodeURIComponent(schema)}/${encodeURIComponent(resource)}/records`
   const url = key === undefined ? path : `${path}/${encodeURIComponent(key)}`
   const response = await fetch(url, {
     method: key === undefined ? 'POST' : 'PATCH',
-    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+    credentials: 'same-origin',
     body: JSON.stringify({ values }),
   })
   const body: unknown = await response.json()
+  if (response.status === 401) handleUnauthorized()
   if (!response.ok) throw readMutationError(body)
   if (!isRecord(body) || !isRecord(body.record)) throw new Error('Invalid mutation response')
   return body.record

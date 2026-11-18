@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { authState, initializeAuth, login, logout } from './auth'
+import LoginPage from './LoginPage.vue'
 import RecordsTable from './RecordsTable.vue'
 import { fetchReadiness, type DatabaseState, type ReadinessResponse } from './readiness'
 import {
@@ -11,14 +13,20 @@ import {
 
 type ViewState = 'loading' | 'ready' | 'error'
 type SchemaViewState = 'loading' | 'ready' | 'empty' | 'not_configured' | 'error'
+type RouteState = 'loading' | 'login' | 'application' | 'error'
 
 const backendBaseURL = (import.meta.env.VITE_BACKEND_BASE_URL ?? '').replace(/\/+$/, '')
+const routeState = ref<RouteState>('loading')
 const viewState = ref<ViewState>('loading')
 const readiness = ref<ReadinessResponse | null>(null)
 const schemaViewState = ref<SchemaViewState>('loading')
 const catalog = ref<SchemaResponse | null>(null)
 const selectedResourceKey = ref('')
 const formDirty = ref(false)
+let intendedRoute = window.location.pathname === '/login'
+  ? '/'
+  : `${window.location.pathname}${window.location.search}${window.location.hash}`
+let initialized = false
 
 const databaseStateLabels: Record<DatabaseState, string> = {
   ready: 'Ready',
@@ -128,16 +136,75 @@ function selectResource(schema: string, resource: string, push = true) {
   selectedResourceKey.value = resourceKey(schema, resource)
 }
 
-onMounted(() => {
-  window.addEventListener('popstate', restoreResourceFromURL)
+function showLogin() {
+  if (window.location.pathname !== '/login') {
+    intendedRoute = `${window.location.pathname}${window.location.search}${window.location.hash}`
+    window.history.replaceState({}, '', '/login')
+  }
+  routeState.value = 'login'
+}
+
+function showApplication() {
+  if (window.location.pathname === '/login') window.history.replaceState({}, '', intendedRoute || '/')
+  routeState.value = 'application'
   void loadReadiness()
   void loadSchema()
+}
+
+async function initialize() {
+  routeState.value = 'loading'
+  await initializeAuth()
+  initialized = true
+  if (authState.status === 'authenticated') showApplication()
+  else if (authState.status === 'anonymous') showLogin()
+  else routeState.value = 'error'
+}
+
+async function submitLogin(email: string, password: string) {
+  if (await login(email, password)) showApplication()
+}
+
+async function submitLogout() {
+  if (await logout()) showLogin()
+}
+
+function handlePopState() {
+  if (authState.status !== 'authenticated') {
+    showLogin()
+    return
+  }
+  if (window.location.pathname === '/login') {
+    showApplication()
+    return
+  }
+  routeState.value = 'application'
+  restoreResourceFromURL()
+}
+
+watch(() => authState.status, (status) => {
+  if (initialized && status === 'anonymous' && routeState.value !== 'login') showLogin()
 })
-onBeforeUnmount(() => window.removeEventListener('popstate', restoreResourceFromURL))
+
+onMounted(() => {
+  window.addEventListener('popstate', handlePopState)
+  void initialize()
+})
+onBeforeUnmount(() => window.removeEventListener('popstate', handlePopState))
 </script>
 
 <template>
-  <div class="app-layout">
+  <LoginPage v-if="routeState === 'login'" :pending="authState.loginPending" :error="authState.loginError" @submit="submitLogin" />
+  <main v-else-if="routeState === 'loading'" class="auth-state" role="status">
+    <p class="eyebrow">Velmir</p>
+    <h1>Checking your session…</h1>
+  </main>
+  <main v-else-if="routeState === 'error'" class="auth-state" role="alert">
+    <p class="eyebrow">Connection error</p>
+    <h1>Velmir is unavailable</h1>
+    <p>{{ authState.error }}</p>
+    <button type="button" class="primary-button" @click="initialize">Try again</button>
+  </main>
+  <div v-else class="app-layout">
     <aside class="sidebar">
       <div class="brand">
         <p class="eyebrow">PostgreSQL admin panel</p>
@@ -174,6 +241,15 @@ onBeforeUnmount(() => window.removeEventListener('popstate', restoreResourceFrom
           </section>
         </nav>
       </div>
+
+      <section class="account" aria-label="Current user">
+        <strong>{{ authState.user?.display_name }}</strong>
+        <span>{{ authState.user?.email }}</span>
+        <p v-if="authState.logoutError" class="account-error" role="alert">{{ authState.logoutError }}</p>
+        <button type="button" class="logout-button" :disabled="authState.logoutPending" @click="submitLogout">
+          {{ authState.logoutPending ? 'Signing out…' : 'Sign out' }}
+        </button>
+      </section>
 
       <section class="readiness" aria-label="Infrastructure readiness">
         <div>

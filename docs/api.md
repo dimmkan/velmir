@@ -1,10 +1,72 @@
 # API
 
+[English version](api_en.md)
+
+## Аутентификация и авторизация
+
+`POST /api/auth/login` доступен публично. Все остальные endpoints `/api`, включая чтение схемы и записей, требуют действительной серверной сессии. `/healthz` и `/readyz` остаются публичными для инфраструктурных проверок. Неаутентифицированные запросы получают HTTP 401 с ошибкой в JSON-обёртке:
+
+```json
+{
+  "error": {
+    "code": "UNAUTHENTICATED",
+    "message": "Authentication required"
+  }
+}
+```
+
+В настоящее время все аутентифицированные пользователи имеют полные права администратора. RBAC, роли и права на отдельные ресурсы на этом этапе не реализованы. Это временное ограничение; элементы управления frontend не являются границей авторизации. Регистрация, управление пользователями через UI и DELETE endpoints недоступны.
+
+### POST /api/auth/login
+
+Тело запроса:
+
+```json
+{
+  "email": "admin@example.com",
+  "password": "the-user-supplied-password"
+}
+```
+
+Успешный ответ — HTTP 200:
+
+```json
+{
+  "user": {
+    "id": 1,
+    "email": "admin@example.com",
+    "display_name": "Administrator"
+  },
+  "csrf_token": "a-random-token-returned-by-the-server"
+}
+```
+
+Каждый вход создаёт новую сессию. Пароли проверяются с помощью Argon2id. Session tokens содержат 32 криптографически случайных байта, а в admin database сохраняются только их SHA-256 hashes. JWT не используются.
+
+Неизвестный email, неправильный пароль и неактивная учётная запись возвращают одинаковый HTTP 401 с кодом `INVALID_CREDENTIALS` и сообщением `Invalid email or password`. Повторные неудачные попытки ограничиваются по исходному IP и по паре IP/email; HTTP 429 использует код `AUTH_RATE_LIMITED` без раскрытия информации об учётной записи.
+
+### GET /api/auth/me
+
+Возвращает HTTP 200 с текущим пользователем и CSRF token в том же формате, что и login. Также продлевает idle expiration сессии. Отсутствующий CSRF cookie заменяется новым. HTTP 401 означает, что сессия отсутствует, отозвана, истекла по idle timeout или по absolute timeout.
+
+### POST /api/auth/logout
+
+Требует session cookie и действительный CSRF-заголовок. Отзывает только текущую сессию, очищает оба authentication cookies и возвращает HTTP 204 без тела ответа.
+
+### Cookies и CSRF
+
+- `velmir_session` — session cookie с `Path=/`, `HttpOnly` и `SameSite=Lax`. Содержит случайный session token и никогда не доступен JavaScript.
+- `velmir_csrf` имеет `Path=/` и `SameSite=Lax`, но не HttpOnly. Его значение также возвращается login/me и хранится только в памяти frontend.
+- Оба cookies получают флаг `Secure` при `SESSION_COOKIE_SECURE=true`; для production с HTTPS этот параметр необходимо включить.
+- Session cookie не имеет постоянного срока действия в браузере. Серверный idle expiration по умолчанию составляет 30 минут, absolute expiration — 24 часа. Они настраиваются через `SESSION_IDLE_TIMEOUT` и `SESSION_ABSOLUTE_TIMEOUT` с использованием синтаксиса длительностей Go.
+
+Для POST/PATCH-запросов к записям и logout передавайте CSRF-значение из login/me в `X-CSRF-Token`. Сервер сравнивает его с `velmir_csrf` за постоянное время. Отсутствующее или несовпадающее значение возвращает HTTP 403 с кодом `CSRF_TOKEN_INVALID`. Login является неаутентифицированной точкой входа и не требует CSRF. Frontend использует same-origin запросы; CORS wildcard с credentials не поддерживается.
+
 ## GET /api/schema
 
-Returns user schemas, tables and views from the configured target database. System schemas are excluded. The endpoint reads PostgreSQL metadata only.
+Возвращает пользовательские схемы, таблицы и представления из настроенной target database. Системные схемы исключаются. Endpoint читает только метаданные PostgreSQL.
 
-Successful response (HTTP 200):
+Успешный ответ (HTTP 200):
 
 ```json
 {
@@ -46,11 +108,11 @@ Successful response (HTTP 200):
 }
 ```
 
-`kind` is `table` or `view`. `default` is `null` when no default exists. `primary_key` marks a key column. `identity` is an empty string, `always` or `by_default`; `generated` marks generated columns. `editable` is true only for supported, non-generated table columns (an `always` identity is not editable). `enum_values` contains allowed labels for enum types and is empty otherwise. Composite primary and foreign keys preserve column order. Empty collections are returned as arrays.
+`kind` принимает значение `table` или `view`. `default` равен `null`, если значение по умолчанию отсутствует. `primary_key` отмечает ключевой столбец. `identity` — пустая строка, `always` или `by_default`; `generated` отмечает сгенерированные столбцы. `editable` истинен только для поддерживаемых несгенерированных столбцов таблицы (`always` identity не редактируется). `enum_values` содержит допустимые метки enum-типов и пуст в остальных случаях. Составные первичные и внешние ключи сохраняют порядок столбцов. Пустые коллекции возвращаются как массивы.
 
-`write_enabled` reports whether the optional target write pool is configured. It does not guarantee that every resource or column is writable.
+`write_enabled` показывает, настроен ли необязательный write pool для target database. Это не гарантирует возможность записи в каждый ресурс или столбец.
 
-If no target database is configured, the endpoint returns HTTP 503:
+Если target database не настроена, endpoint возвращает HTTP 503:
 
 ```json
 {
@@ -61,23 +123,23 @@ If no target database is configured, the endpoint returns HTTP 503:
 }
 ```
 
-Other introspection failures return HTTP 500 with code `SCHEMA_INTROSPECTION_FAILED`.
+Другие ошибки интроспекции возвращают HTTP 500 с кодом `SCHEMA_INTROSPECTION_FAILED`.
 
 ## GET /api/resources/{schema}/{resource}/records
 
-Returns one page of records from a table or view. `schema` and `resource` must exactly match metadata returned by `GET /api/schema`; URL path encoding is supported. Every request uses fresh introspection metadata. Unknown schemas, resources and columns are rejected before SQL execution.
+Возвращает одну страницу записей таблицы или представления. `schema` и `resource` должны точно совпадать с метаданными из `GET /api/schema`; поддерживается URL-кодирование пути. Каждый запрос использует свежие метаданные интроспекции. Неизвестные схемы, ресурсы и столбцы отклоняются до выполнения SQL.
 
-The endpoint is read-only. Dynamic identifiers are quoted after metadata validation, and all search and filter values are sent as PostgreSQL query parameters. SQL expressions in `sort`, `direction`, `search`, `search_column` and `filter` are not supported.
+Endpoint доступен только для чтения. Динамические идентификаторы экранируются после проверки по метаданным, а все значения поиска и фильтров передаются как параметры запроса PostgreSQL. SQL-выражения в `sort`, `direction`, `search`, `search_column` и `filter` не поддерживаются.
 
-### Query parameters
+### Параметры запроса
 
-- `page`: positive integer, default `1`.
-- `limit`: integer from `1` to `100`, default `50`.
-- `sort`: one allowed column name. No expression or comma-separated sorting is accepted.
-- `direction`: `asc` or `desc`, default `asc`. Primary-key tie-breakers use the same direction.
-- `search`: literal, case-insensitive substring searched with `ILIKE`. `%`, `_` and `\` are escaped and have no wildcard meaning.
-- `search_column`: repeatable text-column name. By default, `search` covers every supported text column in the resource. Non-text and unknown columns are rejected.
-- `filter`: URL-encoded JSON array with at most 20 objects. The encoded value must not exceed 64 KiB. Each object has `column`, `operator` and `value`:
+- `page`: положительное целое число, по умолчанию `1`.
+- `limit`: целое число от `1` до `100`, по умолчанию `50`.
+- `sort`: одно разрешённое имя столбца. Выражения и сортировка по нескольким столбцам через запятую не принимаются.
+- `direction`: `asc` или `desc`, по умолчанию `asc`. Дополнительные ключи сортировки по первичному ключу используют то же направление.
+- `search`: буквальная подстрока без учёта регистра, поиск выполняется через `ILIKE`. Символы `%`, `_` и `\` экранируются и не имеют смысла wildcards.
+- `search_column`: повторяемое имя текстового столбца. По умолчанию `search` охватывает все поддерживаемые текстовые столбцы ресурса. Нетекстовые и неизвестные столбцы отклоняются.
+- `filter`: URL-кодированный JSON-массив не более чем с 20 объектами. Кодированное значение не должно превышать 64 КиБ. Каждый объект содержит `column`, `operator` и `value`:
 
 ```json
 [
@@ -87,22 +149,22 @@ The endpoint is read-only. Dynamic identifiers are quoted after metadata validat
 ]
 ```
 
-Comparison values are JSON strings, even for booleans and numbers, so large integers and decimals do not pass through JavaScript numbers. `is_null` takes a JSON boolean: `true` means `IS NULL`, `false` means `IS NOT NULL`. Multiple filters are combined with `AND`.
+Значения сравнения — JSON-строки даже для booleans и numbers, поэтому большие целые и десятичные числа не проходят через JavaScript numbers. `is_null` принимает JSON boolean: `true` означает `IS NULL`, `false` — `IS NOT NULL`. Несколько фильтров объединяются через `AND`.
 
-Supported filters by PostgreSQL type:
+Поддерживаемые фильтры по типам PostgreSQL:
 
 - `text`, `character varying`, `character`, `citext`, `name`: `eq`, `neq`, `contains`, `is_null`.
-- `boolean`: `eq`, `neq`, `is_null`; values are `true` or `false`.
+- `boolean`: `eq`, `neq`, `is_null`; значения — `true` или `false`.
 - `smallint`, `integer`, `bigint`, `real`, `double precision`, `numeric`, `decimal`: `eq`, `neq`, `lt`, `lte`, `gt`, `gte`, `is_null`.
-- `date`: the same comparison operators; values use `YYYY-MM-DD`.
-- `timestamp without time zone`: the same comparison operators; values use `YYYY-MM-DDTHH:MM:SS` with optional fractional seconds.
-- `timestamp with time zone`: the same comparison operators; values use RFC 3339.
-- `uuid`: the same comparison operators; values use canonical UUID format.
-- `json`, `jsonb`, `bytea` and other types: `is_null` only.
+- `date`: те же операторы сравнения; значения в формате `YYYY-MM-DD`.
+- `timestamp without time zone`: те же операторы сравнения; значения в формате `YYYY-MM-DDTHH:MM:SS` с необязательными долями секунды.
+- `timestamp with time zone`: те же операторы сравнения; значения в формате RFC 3339.
+- `uuid`: те же операторы сравнения; значения в каноническом формате UUID.
+- `json`, `jsonb`, `bytea` и другие типы: только `is_null`.
 
-Sorting is available for text, boolean, integer, floating-point, numeric, date, timestamp, UUID, `bytea` and `jsonb` columns. Other types, including `json`, are not sortable through this endpoint.
+Сортировка доступна для text, boolean, integer, floating-point, numeric, date, timestamp, UUID, `bytea` и `jsonb`. Другие типы, включая `json`, не поддерживают сортировку через этот endpoint.
 
-### Successful response
+### Успешный ответ
 
 HTTP 200:
 
@@ -127,41 +189,41 @@ HTTP 200:
 }
 ```
 
-Record keys are column names from `/api/schema`. JSON representations are:
+Ключи записей — имена столбцов из `/api/schema`. Представления в JSON:
 
 - SQL `NULL` → JSON `null`.
 - `boolean` → JSON boolean.
-- `smallint`, `integer`, `real`, `double precision` → JSON number; non-finite floating-point values (`NaN`, infinities) → JSON string.
-- `bigint`, `numeric`, `decimal` → JSON string, preserving integer and decimal precision.
-- `date` → `YYYY-MM-DD` string.
-- timestamps → ISO 8601/RFC 3339 strings with fractional seconds when present.
-- `uuid` → canonical UUID string.
-- `json`, `jsonb` → original JSON value; JSON numbers are not decoded through JavaScript `number`.
-- `bytea` → standard Base64 string.
-- Other PostgreSQL types → a safe string representation.
+- `smallint`, `integer`, `real`, `double precision` → JSON number; нефинитные значения с плавающей точкой (`NaN`, бесконечности) → JSON string.
+- `bigint`, `numeric`, `decimal` → JSON string с сохранением целой и десятичной точности.
+- `date` → строка `YYYY-MM-DD`.
+- timestamps → строки ISO 8601/RFC 3339 с долями секунды, если они присутствуют.
+- `uuid` → каноническая строка UUID.
+- `json`, `jsonb` → исходное JSON-значение; JSON numbers не декодируются через JavaScript `number`.
+- `bytea` → стандартная строка Base64.
+- Другие типы PostgreSQL → безопасное строковое представление.
 
-### Pagination
+### Пагинация
 
-The query fetches `limit + 1` rows to calculate `has_next`; no `COUNT(*)` or total record count is returned. Offset is `(page - 1) * limit`. Large offsets can be expensive.
+Запрос получает `limit + 1` строк для вычисления `has_next`; `COUNT(*)` и общее число записей не возвращаются. Смещение равно `(page - 1) * limit`. Большие смещения могут быть ресурсоёмкими.
 
-When a primary key exists, its columns are appended to the requested sort as unique tie-breakers. Without a requested sort, the primary key is the default ordering. Resources without a primary key have no guaranteed stable ordering between pages, especially when underlying data changes.
+При наличии первичного ключа его столбцы добавляются к запрошенной сортировке как уникальные tie-breakers. Без явной сортировки по умолчанию используется первичный ключ. Для ресурсов без первичного ключа стабильный порядок между страницами не гарантируется, особенно при изменении исходных данных.
 
-### Errors
+### Ошибки
 
-Errors use the same `error.code` and `error.message` envelope as schema introspection:
+Ошибки используют ту же обёртку `error.code` и `error.message`, что и интроспекция схемы:
 
-- HTTP 400: `INVALID_PAGE`, `INVALID_LIMIT`, `INVALID_SORT`, `INVALID_DIRECTION`, `INVALID_SEARCH`, `INVALID_FILTER` or `INVALID_QUERY`.
-- HTTP 404: `RESOURCE_NOT_FOUND` for a schema or resource absent from introspection metadata.
+- HTTP 400: `INVALID_PAGE`, `INVALID_LIMIT`, `INVALID_SORT`, `INVALID_DIRECTION`, `INVALID_SEARCH`, `INVALID_FILTER` или `INVALID_QUERY`.
+- HTTP 404: `RESOURCE_NOT_FOUND`, если схема или ресурс отсутствуют в метаданных интроспекции.
 - HTTP 503: `TARGET_NOT_CONFIGURED`.
-- HTTP 500: `SCHEMA_INTROSPECTION_FAILED` or `RECORDS_QUERY_FAILED`.
+- HTTP 500: `SCHEMA_INTROSPECTION_FAILED` или `RECORDS_QUERY_FAILED`.
 
-Records and introspection queries have a 10-second backend timeout and use the request context, so client cancellation propagates to PostgreSQL.
+Запросы записей и интроспекции имеют backend timeout 10 секунд и используют контекст запроса, поэтому отмена клиентом передаётся в PostgreSQL.
 
 ## POST /api/resources/{schema}/{resource}/records
 
-Creates a record in a table. This endpoint is available only when `TARGET_WRITE_DATABASE_URL` is configured; introspection and identifier validation still use fresh metadata read through `TARGET_DATABASE_URL`.
+Создаёт запись в таблице. Endpoint доступен только при настроенном `TARGET_WRITE_DATABASE_URL`; интроспекция и проверка идентификаторов по-прежнему используют свежие метаданные, прочитанные через `TARGET_DATABASE_URL`.
 
-Request body:
+Тело запроса:
 
 ```json
 {
@@ -176,11 +238,11 @@ Request body:
 }
 ```
 
-Only fields present in `values` are inserted. Omitted generated columns, identity columns and columns with defaults are left to PostgreSQL. A client can use `DEFAULT VALUES` behavior by sending an empty `values` object when all required fields have defaults or are nullable. JSON `null` means SQL `NULL` and is rejected for non-nullable columns. Text empty strings remain empty strings; they are not converted to `NULL`.
+Вставляются только поля, присутствующие в `values`. Пропущенные generated- и identity-столбцы, а также столбцы со значениями по умолчанию остаются на усмотрение PostgreSQL. Клиент может получить поведение `DEFAULT VALUES`, отправив пустой объект `values`, если все обязательные поля имеют значения по умолчанию или допускают NULL. JSON `null` означает SQL `NULL` и отклоняется для non-nullable столбцов. Пустые текстовые строки остаются пустыми строками и не преобразуются в `NULL`.
 
-`bigint`, `numeric` and `decimal` values should be JSON strings to preserve precision. Integer values may be JSON numbers or strings. Dates, timestamps and UUIDs use the same formats as record filters. JSON and JSONB accept any valid JSON value. Enum values must match `enum_values`. Unsupported PostgreSQL types, generated columns and `always` identity columns cannot be supplied.
+Значения `bigint`, `numeric` и `decimal` следует передавать как JSON-строки для сохранения точности. Целые значения могут быть JSON numbers или strings. Даты, timestamps и UUID используют те же форматы, что и фильтры записей. JSON и JSONB принимают любое допустимое JSON-значение. Значения enum должны соответствовать `enum_values`. Неподдерживаемые типы PostgreSQL, generated-столбцы и `always` identity не могут быть переданы.
 
-Successful response is HTTP 201. PostgreSQL `RETURNING` provides the complete saved record using the same safe JSON representation as the list endpoint:
+Успешный ответ — HTTP 201. PostgreSQL `RETURNING` возвращает полную сохранённую запись в том же безопасном JSON-представлении, что и endpoint списка:
 
 ```json
 {
@@ -193,9 +255,9 @@ Successful response is HTTP 201. PostgreSQL `RETURNING` provides the complete sa
 
 ## PATCH /api/resources/{schema}/{resource}/records/{key}
 
-Updates only the supplied editable, non-primary-key fields and returns the complete updated record with HTTP 200. Views and tables without a primary key are read-only for updates. Primary-key updates are not supported.
+Обновляет только переданные редактируемые поля, не входящие в первичный ключ, и возвращает полную обновлённую запись с HTTP 200. Представления и таблицы без первичного ключа доступны только для чтения. Обновление первичных ключей не поддерживается.
 
-`{key}` is a **URL-encoded JSON object** containing exactly the resource's primary-key columns. Object order is not significant. Values use the request JSON representation, including strings for bigint and numeric keys. Examples before URL encoding:
+`{key}` — **URL-кодированный JSON-объект**, содержащий ровно те столбцы, которые входят в первичный ключ ресурса. Порядок полей объекта не важен. Значения используют JSON-представление запроса, включая строки для bigint- и numeric-ключей. Примеры до URL-кодирования:
 
 ```json
 {"id":"42"}
@@ -205,13 +267,13 @@ Updates only the supplied editable, non-primary-key fields and returns the compl
 {"book_id":"10","category_id":"20"}
 ```
 
-For example, `{"id":"42"}` is encoded as `%7B%22id%22%3A%2242%22%7D`. Missing, null, additional or unknown key fields return `INVALID_RECORD_KEY`.
+Например, `{"id":"42"}` кодируется как `%7B%22id%22%3A%2242%22%7D`. Отсутствующие, null, дополнительные или неизвестные поля ключа возвращают `INVALID_RECORD_KEY`.
 
-The request and success bodies have the same shape as creation. An empty `values` object is rejected. Updates have **last write wins** semantics: there is no version column, optimistic lock or concurrent-change detection in this iteration.
+Тела запроса и успешного ответа имеют тот же формат, что и при создании. Пустой объект `values` отклоняется. Обновления используют семантику **last write wins**: в этой итерации нет столбца версии, optimistic lock или обнаружения конкурентных изменений.
 
-### Mutation errors
+### Ошибки изменения записей
 
-The error envelope is shared with read endpoints. Validation and some constraint errors additionally include `field_errors`, keyed by column name:
+Обёртка ошибок совпадает с endpoints чтения. Ошибки валидации и некоторые ошибки ограничений дополнительно содержат `field_errors` с ключами по именам столбцов:
 
 ```json
 {
@@ -223,15 +285,15 @@ The error envelope is shared with read endpoints. Validation and some constraint
 }
 ```
 
-- HTTP 400: `INVALID_RECORD`, `INVALID_RECORD_KEY`, `NOT_NULL_VIOLATION`, `FOREIGN_KEY_VIOLATION` or `CHECK_VIOLATION`.
-- HTTP 403: `TARGET_READ_ONLY` when `TARGET_WRITE_DATABASE_URL` is absent. The read pool remains read-only.
-- HTTP 404: `RESOURCE_NOT_FOUND` or `RECORD_NOT_FOUND`.
-- HTTP 409: `RESOURCE_READ_ONLY` or `UNIQUE_VIOLATION`.
+- HTTP 400: `INVALID_RECORD`, `INVALID_RECORD_KEY`, `NOT_NULL_VIOLATION`, `FOREIGN_KEY_VIOLATION` или `CHECK_VIOLATION`.
+- HTTP 403: `TARGET_READ_ONLY`, если `TARGET_WRITE_DATABASE_URL` отсутствует. Read pool остаётся read-only.
+- HTTP 404: `RESOURCE_NOT_FOUND` или `RECORD_NOT_FOUND`.
+- HTTP 409: `RESOURCE_READ_ONLY` или `UNIQUE_VIOLATION`.
 - HTTP 503: `TARGET_NOT_CONFIGURED`.
-- HTTP 500: `SCHEMA_INTROSPECTION_FAILED` or `RECORD_MUTATION_FAILED`.
+- HTTP 500: `SCHEMA_INTROSPECTION_FAILED` или `RECORD_MUTATION_FAILED`.
 
-Constraint responses use generic messages and do not expose SQL, stack traces or server-internal details. Mutation requests are limited to 1 MiB and have a 10-second backend timeout. Delete endpoints are not implemented.
+Ответы об ошибках ограничений используют общие сообщения и не раскрывают SQL, stack traces или внутренние сведения сервера. Размер mutation-запросов ограничен 1 МиБ, backend timeout составляет 10 секунд. DELETE endpoints не реализованы.
 
 ## GET /readyz
 
-Returns `admin_database` and `target_database` states. Each state is `ready`, `unavailable` or `not_configured`. A valid JSON body describes component states even when the HTTP status is 503.
+Возвращает состояния `admin_database` и `target_database`. Каждое состояние — `ready`, `unavailable` или `not_configured`. Корректное JSON-тело описывает состояния компонентов даже при HTTP 503.

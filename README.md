@@ -1,23 +1,25 @@
 # Velmir
 
-Velmir is a metadata-driven PostgreSQL admin panel. The current stage provides schema introspection, universal record lists with pagination, sorting, search and typed filters, plus automatic forms for creating and editing records. Deletion, authentication, authorization, relations UI and audit are not implemented.
+[English version](README_EN.md)
 
-## Requirements
+Velmir — панель администрирования PostgreSQL, управляемая метаданными. На текущем этапе реализованы introspection схемы, универсальные списки записей с пагинацией, сортировкой, поиском и типизированными фильтрами, автоматические формы создания и редактирования записей, а также аутентификация с серверными сессиями. Удаление записей, RBAC, управление пользователями через UI, relations UI и audit пока не реализованы.
 
-- Go **1.26.0** (see `backend/go.mod`)
-- Node.js and npm
-- Docker with Docker Compose
+## Требования
 
-## Local startup
+- Go **1.26.0** (см. `backend/go.mod`)
+- Node.js и npm
+- Docker с Docker Compose
 
-From the repository root in PowerShell:
+## Локальный запуск
+
+В корне репозитория в PowerShell:
 
 ```powershell
 Copy-Item .env.example .env
 docker compose up -d admin-db target-db
 ```
 
-Apply migrations to the admin database and start the backend:
+Перед первым запуском backend задайте в `.env` переменные `VELMIR_BOOTSTRAP_ADMIN_EMAIL` и `VELMIR_BOOTSTRAP_ADMIN_PASSWORD`: уникальный email администратора и длинный случайный пароль длиной не менее 12 символов. Не используйте стандартный пароль. Примените миграции к admin database и запустите backend:
 
 ```powershell
 Set-Location backend
@@ -25,7 +27,9 @@ go run ./cmd/migrate
 go run ./cmd/server
 ```
 
-In a second terminal, start the frontend:
+Если в admin database нет пользователей, при запуске сервер однократно создаёт первого администратора и выводит в лог напоминание без пароля. **После создания администратора удалите обе bootstrap-переменные из `.env` и окружения процесса, затем перезапустите backend.** При последующих запусках новый пользователь не создаётся, пока в базе существует хотя бы один пользователь. Если база пуста, а bootstrap-значения не заданы, запуск завершится с понятной ошибкой. Регистрация и управление пользователями через UI намеренно отсутствуют.
+
+Во втором терминале запустите frontend:
 
 ```powershell
 Set-Location frontend
@@ -34,41 +38,51 @@ npm ci
 npm run dev
 ```
 
-The backend listens on `http://127.0.0.1:8080` by default. It remains local-only unless `HTTP_ADDR` is explicitly changed. The frontend example environment points to that URL.
+По умолчанию backend слушает `http://127.0.0.1:8080` и остаётся доступным только локально, пока явно не изменён `HTTP_ADDR`. Открывайте URL Vite (обычно `http://localhost:5173`), а не URL backend. Vite проксирует `/api`, `/healthz` и `/readyz` на `VITE_BACKEND_PROXY_TARGET`, поэтому cookies и API-запросы используют тот же origin в браузере. `VITE_BACKEND_BASE_URL` должен оставаться пустым.
 
-## Databases and write safety
+В production раздавайте собранный frontend и backend API через один HTTPS origin и настройте SPA fallback для `/login`. Оставьте `VITE_BACKEND_BASE_URL` пустым и установите `SESSION_COOKIE_SECURE=true`. CORS wildcard с credentials не используется и не требуется.
 
-- **Admin database** (`localhost:5432`, database `velmir_admin`) belongs to Velmir. Goose migrations run only here and currently provide the administrative migration baseline.
-- **Demo target database** (`localhost:5433`, database `velmir_demo`) is a separate PostgreSQL instance. Docker initializes demonstration tables, records, a view, primary keys and foreign keys.
-- `TARGET_DATABASE_URL` is the existing read-only target connection. Its pool always sets `default_transaction_read_only=on`; it is used for introspection and record reads and is never reused for mutations.
-- `TARGET_WRITE_DATABASE_URL` is a separate **optional** connection used only for INSERT and UPDATE. The example points to the local demo writer role. Leave it empty or remove it to disable all mutation controls and make mutation endpoints return `TARGET_READ_ONLY`.
-- Velmir never runs migrations, automatic GRANT statements or DDL against a target database. Do not point integration tests or either target URL at a real database for local demo setup.
+## Аутентификация и сессии
 
-The demo `velmir_writer` role has only:
+При запуске приложение вызывает `GET /api/auth/me`, перенаправляет неавторизованных пользователей на `/login`, а после входа восстанавливает исходный маршрут. Выход отзывает только текущую сессию. Для mutation-запросов и выхода требуется проверяемый сервером заголовок `X-CSRF-Token`. Пароли, session tokens и CSRF tokens не сохраняются в `localStorage`; session cookie имеет флаг HttpOnly, а CSRF token хранится только в памяти.
 
-- `CONNECT` on `velmir_demo` and `USAGE` on schema `public`;
-- `SELECT`, `INSERT`, `UPDATE` on the existing demo tables;
-- `USAGE`, `SELECT`, `UPDATE` on the existing demo sequences, required for identity/default sequence values.
+Session cookies используют `SameSite=Lax`; idle expiration по умолчанию составляет `30m`, absolute expiration — `24h`. Атрибуты cookies, настройки и ответы endpoints описаны в `docs/api.md`.
 
-It has no `CREATE`, `ALTER`, `DROP`, `TRUNCATE` or `DELETE` privilege. The `velmir_readonly` role retains read-only transactions and SELECT privileges.
+**Временное ограничение авторизации:** каждый аутентифицированный пользователь имеет полные права администратора. RBAC, роли и права на отдельные ресурсы пока не реализованы. На этом этапе доступ проверяется middleware аутентификации на backend, а не скрытием кнопок во frontend.
 
-To run without a target database, leave `TARGET_DATABASE_URL` empty. The backend still starts, readiness reports `not_configured`, and `/api/schema` returns `TARGET_NOT_CONFIGURED`.
+## Базы данных и безопасность записи
 
-## Creating and editing records
+- **Admin database** (`localhost:5432`, база `velmir_admin`) принадлежит Velmir. Goose-миграции выполняются только здесь и создают migration baseline, а также таблицы `users` и `sessions`.
+- **Демонстрационная target database** (`localhost:5433`, база `velmir_demo`) — отдельный экземпляр PostgreSQL. Docker создаёт демонстрационные таблицы, записи, представление, первичные и внешние ключи.
+- `TARGET_DATABASE_URL` — существующее подключение к target database только для чтения. Его пул всегда устанавливает `default_transaction_read_only=on`; он используется для introspection и чтения записей и никогда — для mutations.
+- `TARGET_WRITE_DATABASE_URL` — отдельное **необязательное** подключение, используемое только для INSERT и UPDATE. Пример указывает на локальную демонстрационную writer-роль. Оставьте переменную пустой или удалите её, чтобы отключить элементы управления mutations и получать `TARGET_READ_ONLY` от mutation endpoints.
+- Velmir никогда не выполняет миграции, автоматические GRANT или DDL в target database. Не указывайте в integration-тестах или target URL реальную базу данных при локальной демонстрационной настройке.
 
-The frontend builds all forms from `/api/schema`; there are no table-specific forms. Supported inputs cover text, boolean, integer, bigint/numeric, date, timestamps, UUID, enums and JSON. Nullable fields have an explicit NULL control, and create forms can explicitly use a database default. Generated and `always` identity fields are not required or editable.
+Демонстрационная роль `velmir_writer` имеет только:
 
-Updates require a primary key, including composite keys, and cannot change primary-key fields. Tables without a primary key allow creation but not updates. Views are read-only. Unsupported PostgreSQL types are displayed but not edited automatically. PostgreSQL not-null, unique, foreign-key and check violations are shown as API/form errors.
+- `CONNECT` к `velmir_demo` и `USAGE` для схемы `public`;
+- `SELECT`, `INSERT`, `UPDATE` для существующих демонстрационных таблиц;
+- `USAGE`, `SELECT`, `UPDATE` для существующих демонстрационных последовательностей, необходимых для identity/default значений.
 
-After saving, the current record list is refreshed. Forms warn about unsaved changes before closing or leaving the page. Concurrent updates currently have **last write wins** semantics; optimistic locking and conflict detection are not implemented. Deletion is intentionally unavailable.
+У неё нет прав `CREATE`, `ALTER`, `DROP`, `TRUNCATE` или `DELETE`. Роль `velmir_readonly` сохраняет read-only транзакции и права SELECT.
 
-See `docs/api.md` for mutation request bodies, record-key encoding and error codes.
+Чтобы запустить приложение без target database, оставьте `TARGET_DATABASE_URL` пустым. Backend всё равно запустится, readiness покажет `not_configured`, а `/api/schema` вернёт `TARGET_NOT_CONFIGURED`.
 
-## Demo target reset
+## Создание и редактирование записей
 
-Initialization scripts run only when Docker creates a new target data volume. This stage adds the demo writer role and a `book_categories.note` column, so an already initialized demo volume must be recreated to apply them.
+Frontend строит все формы на основе `/api/schema`; форм для конкретных таблиц нет. Поддерживаются text, boolean, integer, bigint/numeric, date, timestamps, UUID, enums и JSON. Для nullable-полей есть отдельный NULL control, а в формах создания можно явно использовать database default. Сгенерированные поля и `always` identity не являются обязательными и не редактируются.
 
-The following commands destroy **only the local `velmir_demo` target container and its demo volume**. They do not remove the admin database volume. Do not use them for a real database:
+Для обновления требуется первичный ключ, в том числе составной; поля первичного ключа изменять нельзя. В таблицах без первичного ключа можно создавать записи, но нельзя обновлять. Представления доступны только для чтения. Неподдерживаемые типы PostgreSQL отображаются, но автоматически не редактируются. Нарушения PostgreSQL not-null, unique, foreign-key и check отображаются как ошибки API/формы.
+
+После сохранения текущий список записей обновляется. Формы предупреждают о несохранённых изменениях перед закрытием или уходом со страницы. При конкурентных обновлениях сейчас действует семантика **last write wins**; optimistic locking и обнаружение конфликтов не реализованы. Удаление намеренно недоступно.
+
+Тела mutation-запросов, кодирование ключей записей и коды ошибок описаны в `docs/api.md`.
+
+## Сброс демонстрационной target database
+
+Скрипты инициализации выполняются только при создании Docker нового тома target database. На текущем этапе добавлены демонстрационная writer-роль и столбец `book_categories.note`, поэтому уже инициализированный том нужно пересоздать для их применения.
+
+Следующие команды удаляют **только локальный контейнер target `velmir_demo` и его демонстрационный том**. Они не удаляют том admin database. Не используйте их для реальной базы данных:
 
 ```powershell
 docker compose stop target-db
@@ -77,9 +91,9 @@ docker volume rm velmir_target-db-data
 docker compose up -d target-db
 ```
 
-If the Compose project name is not `velmir`, replace the volume prefix with the name shown by `docker volume ls`.
+Если имя Compose-проекта отличается от `velmir`, замените префикс тома на имя, показанное командой `docker volume ls`.
 
-## Checks
+## Проверки
 
 ```powershell
 Set-Location backend
@@ -96,7 +110,7 @@ Set-Location ..
 docker compose config
 ```
 
-Integration tests are excluded from unit tests by the `integration` build tag. Run them separately, only with the initialized local demo database:
+Integration-тесты исключены из unit-тестов с помощью build tag `integration`. Запускайте их отдельно и только с инициализированной локальной демонстрационной базой:
 
 ```powershell
 Set-Location backend
@@ -106,6 +120,12 @@ go test -tags=integration ./internal/records -v -timeout 30s
 
 $env:TEST_TARGET_WRITE_DATABASE_URL = "postgresql://velmir_writer:velmir_writer_local_only@localhost:5433/velmir_demo?sslmode=disable"
 go test -tags=integration ./internal/records -run TestWriterDemoDatabase -v -timeout 30s
+
+$env:TEST_ADMIN_DATABASE_URL = "postgresql://velmir:velmir_local_only@localhost:5432/velmir_admin?sslmode=disable"
+go test -tags=integration ./internal/auth -v -timeout 30s
+Remove-Item Env:TEST_ADMIN_DATABASE_URL
 ```
 
-The writer integration test creates and updates demo records and intentionally leaves them in the demo database; it does not delete records. It refuses to run against a non-local host or a database other than `velmir_demo`.
+Integration-тест writer создаёт и обновляет демонстрационные записи и намеренно оставляет их в демонстрационной базе; записи не удаляются. Тест отказывается работать с нелокальным хостом или базой, отличной от `velmir_demo`.
+
+Integration-тест auth требует локальную базу `velmir_admin` с применёнными миграциями, отклоняет нелокальные хосты и другие имена баз и откатывает свою транзакцию. Он никогда не подключается к target database. Не запускайте его против реальной admin database.

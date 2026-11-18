@@ -1,3 +1,4 @@
+import { handleUnauthorized } from './auth'
 import type { ColumnMetadata, ResourceMetadata } from './schema'
 
 export const DEFAULT_RECORDS_LIMIT = 50
@@ -140,9 +141,10 @@ export async function fetchRecords(
   const query = buildRecordsQuery(state)
   const response = await fetch(
     `${backendBaseURL}/api/resources/${encodeURIComponent(schema)}/${encodeURIComponent(resource)}/records?${query}`,
-    { headers: { Accept: 'application/json' }, signal },
+    { headers: { Accept: 'application/json' }, credentials: 'same-origin', signal },
   )
   const body: unknown = await response.json()
+  if (response.status === 401) handleUnauthorized()
   if (!response.ok) {
     const error = readError(body)
     throw new RecordsRequestError(error.code, error.message)

@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"velmir/backend/internal/auth"
 	"velmir/backend/internal/config"
 	"velmir/backend/internal/database"
 	"velmir/backend/internal/httpapi"
@@ -43,13 +44,27 @@ func run() error {
 		defer targetWriteDatabase.Close()
 	}
 
+	authService, err := auth.NewService(auth.NewStore(adminDatabase), cfg.SessionIdleTimeout, cfg.SessionAbsoluteTimeout)
+	if err != nil {
+		return fmt.Errorf("initialize authentication: %w", err)
+	}
+	bootstrapContext, cancelBootstrap := context.WithTimeout(context.Background(), 30*time.Second)
+	created, err := auth.Bootstrap(bootstrapContext, adminDatabase, cfg.BootstrapAdminEmail, cfg.BootstrapAdminPassword)
+	cancelBootstrap()
+	if err != nil {
+		return fmt.Errorf("bootstrap administrator: %w", err)
+	}
+	if created {
+		log.Print("bootstrap administrator created; remove VELMIR_BOOTSTRAP_ADMIN_EMAIL and VELMIR_BOOTSTRAP_ADMIN_PASSWORD from the environment")
+	}
+
 	var writer *records.Writer
 	if targetWriteDatabase != nil {
 		writer = records.NewWriter(targetWriteDatabase)
 	}
-	router := httpapi.NewRouterWithWriter(adminDatabase, nil, nil, nil, writer)
+	router := httpapi.NewRouter(adminDatabase, nil, nil, nil, writer, authService, cfg.SessionCookieSecure)
 	if targetDatabase != nil {
-		router = httpapi.NewRouterWithWriter(adminDatabase, targetDatabase, introspection.New(targetDatabase), records.New(targetDatabase), writer)
+		router = httpapi.NewRouter(adminDatabase, targetDatabase, introspection.New(targetDatabase), records.New(targetDatabase), writer, authService, cfg.SessionCookieSecure)
 	}
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,

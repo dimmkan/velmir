@@ -58,23 +58,23 @@ type mutationRequest struct {
 	Values records.RecordValues `json:"values"`
 }
 
-func NewRouter(adminDatabase, targetDatabase databasePinger, inspector schemaInspector, listers ...recordLister) http.Handler {
-	var lister recordLister
-	if len(listers) > 0 {
-		lister = listers[0]
-	}
-	return NewRouterWithWriter(adminDatabase, targetDatabase, inspector, lister, nil)
-}
-
-func NewRouterWithWriter(adminDatabase, targetDatabase databasePinger, inspector schemaInspector, lister recordLister, writer recordWriter) http.Handler {
+func NewRouter(adminDatabase, targetDatabase databasePinger, inspector schemaInspector, lister recordLister, writer recordWriter, authService authService, secureCookies bool) http.Handler {
 	router := chi.NewRouter()
-	router.Use(cors)
 	router.Get("/healthz", healthz)
 	router.Get("/readyz", readyz(adminDatabase, targetDatabase))
-	router.Get("/api/schema", schema(inspector, writer != nil))
-	router.Get("/api/resources/{schema}/{resource}/records", listRecords(inspector, lister))
-	router.Post("/api/resources/{schema}/{resource}/records", createRecord(inspector, writer))
-	router.Patch("/api/resources/{schema}/{resource}/records/{key}", updateRecord(inspector, writer))
+	router.Post("/api/auth/login", login(authService, secureCookies))
+	router.Group(func(r chi.Router) {
+		r.Use(requireAuth(authService))
+		r.Get("/api/auth/me", me(secureCookies))
+		r.With(requireCSRF).Post("/api/auth/logout", logout(authService, secureCookies))
+		r.Get("/api/schema", schema(inspector, writer != nil))
+		r.Get("/api/resources/{schema}/{resource}/records", listRecords(inspector, lister))
+		r.With(requireCSRF).Post("/api/resources/{schema}/{resource}/records", createRecord(inspector, writer))
+		r.With(requireCSRF).Patch("/api/resources/{schema}/{resource}/records/{key}", updateRecord(inspector, writer))
+	})
+	router.NotFound(func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusNotFound, errorResponse{Error: apiError{Code: "NOT_FOUND", Message: "Endpoint not found"}})
+	})
 	return router
 }
 
@@ -312,23 +312,10 @@ func databaseStatus(ctx context.Context, database databasePinger) string {
 	return "ready"
 }
 
-func cors(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type")
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
 func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(body)
 }

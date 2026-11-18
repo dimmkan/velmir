@@ -39,4 +39,18 @@ describe('record mutations', () => {
     await expect(request).rejects.toMatchObject({ code: 'CHECK_VIOLATION', fieldErrors: { note: 'Invalid note' } })
     expect(fetch).toHaveBeenCalledWith(`/api/resources/public/links/records/${encodeURIComponent(key)}`, expect.objectContaining({ method: 'PATCH' }))
   })
+
+  it('sends the CSRF token and credentials with a mutation payload', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ record: { id: '9' } }), { status: 201 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await createRecord('', 'public', 'items', { name: 'new' }, 'test-csrf-token')
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/resources/public/items/records', expect.objectContaining({
+      method: 'POST',
+      headers: expect.objectContaining({ 'X-CSRF-Token': 'test-csrf-token' }),
+      credentials: 'same-origin',
+      body: '{"values":{"name":"new"}}',
+    }))
+  })
 })

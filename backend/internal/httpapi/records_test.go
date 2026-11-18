@@ -53,7 +53,7 @@ func TestListRecords(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/api/resources/public/items/records?page=2&limit=1&sort=name&direction=desc&search=abc&search_column=name", nil)
 	response := httptest.NewRecorder()
 
-	NewRouter(nil, nil, recordsInspector(), lister).ServeHTTP(response, request)
+	newTestRouter(nil, nil, recordsInspector(), lister).ServeHTTP(response, request)
 
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
@@ -96,7 +96,7 @@ func TestListRecordsValidation(t *testing.T) {
 			request := httptest.NewRequest(http.MethodGet, tt.target, nil)
 			response := httptest.NewRecorder()
 
-			NewRouter(nil, nil, recordsInspector(), lister).ServeHTTP(response, request)
+			newTestRouter(nil, nil, recordsInspector(), lister).ServeHTTP(response, request)
 
 			if response.Code != tt.wantStatus {
 				t.Fatalf("status = %d, want %d; body = %s", response.Code, tt.wantStatus, response.Body.String())
@@ -118,7 +118,7 @@ func TestListRecordsValidation(t *testing.T) {
 func TestListRecordsTargetNotConfigured(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/api/resources/public/items/records", nil)
 	response := httptest.NewRecorder()
-	NewRouter(nil, nil, nil).ServeHTTP(response, request)
+	newTestRouter(nil, nil, nil).ServeHTTP(response, request)
 	if response.Code != http.StatusServiceUnavailable {
 		t.Errorf("status = %d", response.Code)
 	}
@@ -130,7 +130,7 @@ func TestListRecordsQueryFailureIsGeneric(t *testing.T) {
 	})
 	request := httptest.NewRequest(http.MethodGet, "/api/resources/public/items/records", nil)
 	response := httptest.NewRecorder()
-	NewRouter(nil, nil, recordsInspector(), lister).ServeHTTP(response, request)
+	newTestRouter(nil, nil, recordsInspector(), lister).ServeHTTP(response, request)
 	if response.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d", response.Code)
 	}

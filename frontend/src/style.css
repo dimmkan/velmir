@@ -705,3 +705,90 @@ select:disabled {
     padding: 28px 16px;
   }
 }
+
+.login-layout {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: #162238;
+}
+
+.login-panel {
+  width: min(100%, 420px);
+  padding: 36px;
+  background: #ffffff;
+  border-radius: 16px;
+  box-shadow: 0 24px 64px rgb(0 0 0 / 24%);
+}
+
+.login-panel h1,
+.auth-state h1 {
+  margin: 0 0 12px;
+}
+
+.login-intro {
+  margin-bottom: 24px;
+  color: #697586;
+  line-height: 1.5;
+}
+
+.login-form {
+  display: grid;
+  gap: 18px;
+}
+
+.login-form label {
+  display: grid;
+  gap: 7px;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.login-form .primary-button {
+  margin-top: 4px;
+}
+
+.login-error,
+.account-error {
+  padding: 10px 12px;
+  color: #8d302b;
+  background: #fff8f7;
+  border: 1px solid #f1c5c1;
+  border-radius: 8px;
+  font-size: 0.875rem;
+}
+
+.auth-state {
+  max-width: 520px;
+  margin: 20vh auto;
+  padding: 24px;
+  text-align: center;
+}
+
+.account {
+  display: grid;
+  gap: 4px;
+  padding: 16px 24px;
+  border-top: 1px solid rgb(255 255 255 / 10%);
+  font-size: 0.8rem;
+}
+
+.account > span {
+  color: #9eacc3;
+  overflow-wrap: anywhere;
+}
+
+.account-error {
+  margin: 8px 0;
+}
+
+.logout-button {
+  justify-self: start;
+  margin-top: 8px;
+  padding: 0;
+  color: #a9c0ff;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
