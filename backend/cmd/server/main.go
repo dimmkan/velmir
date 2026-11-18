@@ -1,29 +1,78 @@
 package main
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"velmir/backend/internal/config"
+	"velmir/backend/internal/database"
 	"velmir/backend/internal/httpapi"
 )
 
 func main() {
+	if err := run(); err != nil {
+		log.Printf("server stopped: %v", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	cfg, err := config.Load()
 	if err != nil {
-		log.Fatalf("load configuration: %v", err)
+		return fmt.Errorf("load configuration: %w", err)
 	}
 
+	adminDatabase, targetDatabase, err := database.NewPools(context.Background(), cfg.AdminDatabaseURL, cfg.TargetDatabaseURL)
+	if err != nil {
+		return err
+	}
+	defer adminDatabase.Close()
+	if targetDatabase != nil {
+		defer targetDatabase.Close()
+	}
+
+	router := httpapi.NewRouter(adminDatabase, nil)
+	if targetDatabase != nil {
+		router = httpapi.NewRouter(adminDatabase, targetDatabase)
+	}
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           httpapi.NewRouter(),
+		Handler:           router,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
+	signalContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	serverError := make(chan error, 1)
+	go func() {
+		serverError <- server.ListenAndServe()
+	}()
+
 	log.Printf("backend listening on %s", cfg.HTTPAddr)
-	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatalf("serve HTTP: %v", err)
+	select {
+	case err := <-serverError:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return fmt.Errorf("serve HTTP: %w", err)
+		}
+		return nil
+	case <-signalContext.Done():
 	}
+
+	shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := server.Shutdown(shutdownContext); err != nil {
+		return fmt.Errorf("shut down HTTP server: %w", err)
+	}
+	if err := <-serverError; err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return fmt.Errorf("serve HTTP: %w", err)
+	}
+	return nil
 }

@@ -22,7 +22,7 @@ body {
   padding: 24px;
 }
 
-.welcome-card {
+.status-card {
   width: min(100%, 560px);
   padding: 48px;
   background: #ffffff;
@@ -40,6 +40,13 @@ body {
   text-transform: uppercase;
 }
 
+.heading-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
 h1 {
   margin: 0;
   font-size: clamp(2.5rem, 8vw, 4rem);
@@ -47,24 +54,100 @@ h1 {
 }
 
 .description {
-  margin: 24px 0;
+  margin: 20px 0 32px;
   color: #536179;
   font-size: 1.1rem;
-  line-height: 1.6;
 }
 
-.scaffold-status {
-  display: inline-block;
-  margin: 0;
-  padding: 8px 12px;
+.overall-status {
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.overall-status-ready {
   color: #31572c;
   background: #edf7ed;
-  border-radius: 8px;
+}
+
+.overall-status-not_ready {
+  color: #8a4b0f;
+  background: #fff4e5;
+}
+
+.status-list {
+  margin: 0;
+}
+
+.status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 0;
+  border-top: 1px solid #e8edf4;
+}
+
+.status-row dt {
+  font-weight: 600;
+}
+
+.status-row dd {
+  margin: 0;
   font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.status-ready {
+  color: #31572c;
+}
+
+.status-unavailable,
+.status-error {
+  color: #b42318;
+}
+
+.status-not_configured,
+.status-loading {
+  color: #697586;
+}
+
+.error-message {
+  margin-top: 24px;
+  padding: 16px;
+  color: #8f1d16;
+  background: #fff1f0;
+  border-radius: 8px;
+  line-height: 1.5;
+}
+
+.error-message p {
+  margin: 0 0 12px;
+}
+
+button {
+  padding: 8px 14px;
+  color: #ffffff;
+  background: #b42318;
+  border: 0;
+  border-radius: 6px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button:hover {
+  background: #8f1d16;
+}
+
+button:focus-visible {
+  outline: 3px solid rgb(180 35 24 / 30%);
+  outline-offset: 2px;
 }
 
 @media (max-width: 480px) {
-  .welcome-card {
+  .status-card {
     padding: 32px 24px;
   }
 }

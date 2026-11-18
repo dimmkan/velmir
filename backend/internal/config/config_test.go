@@ -37,24 +37,25 @@ func TestLoadCustomHTTPAddr(t *testing.T) {
 	}
 }
 
-func TestLoadRequiresDatabaseURLs(t *testing.T) {
-	tests := []struct {
-		name      string
-		targetURL string
-		adminURL  string
-	}{
-		{name: "target", targetURL: "", adminURL: "postgres://admin.example/test"},
-		{name: "admin", targetURL: "postgres://target.example/test", adminURL: ""},
+func TestLoadAllowsMissingTargetDatabaseURL(t *testing.T) {
+	t.Setenv("TARGET_DATABASE_URL", "")
+	t.Setenv("ADMIN_DATABASE_URL", "postgres://admin.example/test")
+	t.Setenv("HTTP_ADDR", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
 	}
+	if cfg.TargetDatabaseURL != "" {
+		t.Errorf("TargetDatabaseURL = %q, want empty", cfg.TargetDatabaseURL)
+	}
+}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv("TARGET_DATABASE_URL", tt.targetURL)
-			t.Setenv("ADMIN_DATABASE_URL", tt.adminURL)
+func TestLoadRequiresAdminDatabaseURL(t *testing.T) {
+	t.Setenv("TARGET_DATABASE_URL", "postgres://target.example/test")
+	t.Setenv("ADMIN_DATABASE_URL", "")
 
-			if _, err := Load(); err == nil {
-				t.Fatal("Load() error = nil, want configuration error")
-			}
-		})
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil, want configuration error")
 	}
 }
