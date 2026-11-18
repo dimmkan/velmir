@@ -15,9 +15,9 @@ const resource: ResourceMetadata = {
   primary_key: ['id'],
   foreign_keys: [],
   columns: [
-    { name: 'id', data_type: 'bigint', nullable: false, default: null },
-    { name: 'title', data_type: 'character varying(255)', nullable: false, default: null },
-    { name: 'payload', data_type: 'jsonb', nullable: true, default: null },
+    { name: 'id', data_type: 'bigint', nullable: false, default: null, primary_key: false, identity: '', generated: false, editable: true, enum_values: [] },
+    { name: 'title', data_type: 'character varying(255)', nullable: false, default: null, primary_key: false, identity: '', generated: false, editable: true, enum_values: [] },
+    { name: 'payload', data_type: 'jsonb', nullable: true, default: null, primary_key: false, identity: '', generated: false, editable: true, enum_values: [] },
   ],
 }
 

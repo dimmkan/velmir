@@ -4,6 +4,7 @@ import "testing"
 
 func TestLoad(t *testing.T) {
 	t.Setenv("TARGET_DATABASE_URL", "postgres://target.example/test")
+	t.Setenv("TARGET_WRITE_DATABASE_URL", "postgres://writer.example/test")
 	t.Setenv("ADMIN_DATABASE_URL", "postgres://admin.example/test")
 	t.Setenv("HTTP_ADDR", "")
 
@@ -14,6 +15,9 @@ func TestLoad(t *testing.T) {
 
 	if cfg.TargetDatabaseURL != "postgres://target.example/test" {
 		t.Errorf("TargetDatabaseURL = %q", cfg.TargetDatabaseURL)
+	}
+	if cfg.TargetWriteDatabaseURL != "postgres://writer.example/test" {
+		t.Errorf("TargetWriteDatabaseURL = %q", cfg.TargetWriteDatabaseURL)
 	}
 	if cfg.AdminDatabaseURL != "postgres://admin.example/test" {
 		t.Errorf("AdminDatabaseURL = %q", cfg.AdminDatabaseURL)

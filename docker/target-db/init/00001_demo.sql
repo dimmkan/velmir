@@ -23,6 +23,7 @@ CREATE TABLE categories (
 CREATE TABLE book_categories (
     book_id bigint NOT NULL REFERENCES books(id),
     category_id bigint NOT NULL REFERENCES categories(id),
+    note text,
     PRIMARY KEY (book_id, category_id)
 );
 
@@ -55,3 +56,9 @@ GRANT CONNECT ON DATABASE velmir_demo TO velmir_readonly;
 GRANT USAGE ON SCHEMA public TO velmir_readonly;
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO velmir_readonly;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO velmir_readonly;
+
+CREATE ROLE velmir_writer LOGIN PASSWORD 'velmir_writer_local_only';
+GRANT CONNECT ON DATABASE velmir_demo TO velmir_writer;
+GRANT USAGE ON SCHEMA public TO velmir_writer;
+GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA public TO velmir_writer;
+GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO velmir_writer;

@@ -8,6 +8,7 @@ Successful response (HTTP 200):
 
 ```json
 {
+  "write_enabled": true,
   "schemas": [
     {
       "name": "public",
@@ -20,7 +21,12 @@ Successful response (HTTP 200):
               "name": "id",
               "data_type": "bigint",
               "nullable": false,
-              "default": "nextval('items_id_seq'::regclass)"
+              "default": "nextval('items_id_seq'::regclass)",
+              "primary_key": true,
+              "identity": "always",
+              "generated": false,
+              "editable": false,
+              "enum_values": []
             }
           ],
           "primary_key": ["id"],
@@ -40,7 +46,9 @@ Successful response (HTTP 200):
 }
 ```
 
-`kind` is `table` or `view`. `default` is `null` when no default exists. Composite primary and foreign keys preserve column order. Empty collections are returned as arrays.
+`kind` is `table` or `view`. `default` is `null` when no default exists. `primary_key` marks a key column. `identity` is an empty string, `always` or `by_default`; `generated` marks generated columns. `editable` is true only for supported, non-generated table columns (an `always` identity is not editable). `enum_values` contains allowed labels for enum types and is empty otherwise. Composite primary and foreign keys preserve column order. Empty collections are returned as arrays.
+
+`write_enabled` reports whether the optional target write pool is configured. It does not guarantee that every resource or column is writable.
 
 If no target database is configured, the endpoint returns HTTP 503:
 
@@ -148,6 +156,81 @@ Errors use the same `error.code` and `error.message` envelope as schema introspe
 - HTTP 500: `SCHEMA_INTROSPECTION_FAILED` or `RECORDS_QUERY_FAILED`.
 
 Records and introspection queries have a 10-second backend timeout and use the request context, so client cancellation propagates to PostgreSQL.
+
+## POST /api/resources/{schema}/{resource}/records
+
+Creates a record in a table. This endpoint is available only when `TARGET_WRITE_DATABASE_URL` is configured; introspection and identifier validation still use fresh metadata read through `TARGET_DATABASE_URL`.
+
+Request body:
+
+```json
+{
+  "values": {
+    "title": "PostgreSQL Guide",
+    "author_id": "1",
+    "price": "12345678901234567890.01",
+    "active": true,
+    "published_on": "2025-01-02",
+    "metadata": {"edition": 1}
+  }
+}
+```
+
+Only fields present in `values` are inserted. Omitted generated columns, identity columns and columns with defaults are left to PostgreSQL. A client can use `DEFAULT VALUES` behavior by sending an empty `values` object when all required fields have defaults or are nullable. JSON `null` means SQL `NULL` and is rejected for non-nullable columns. Text empty strings remain empty strings; they are not converted to `NULL`.
+
+`bigint`, `numeric` and `decimal` values should be JSON strings to preserve precision. Integer values may be JSON numbers or strings. Dates, timestamps and UUIDs use the same formats as record filters. JSON and JSONB accept any valid JSON value. Enum values must match `enum_values`. Unsupported PostgreSQL types, generated columns and `always` identity columns cannot be supplied.
+
+Successful response is HTTP 201. PostgreSQL `RETURNING` provides the complete saved record using the same safe JSON representation as the list endpoint:
+
+```json
+{
+  "record": {
+    "id": "9223372036854775807",
+    "title": "PostgreSQL Guide"
+  }
+}
+```
+
+## PATCH /api/resources/{schema}/{resource}/records/{key}
+
+Updates only the supplied editable, non-primary-key fields and returns the complete updated record with HTTP 200. Views and tables without a primary key are read-only for updates. Primary-key updates are not supported.
+
+`{key}` is a **URL-encoded JSON object** containing exactly the resource's primary-key columns. Object order is not significant. Values use the request JSON representation, including strings for bigint and numeric keys. Examples before URL encoding:
+
+```json
+{"id":"42"}
+```
+
+```json
+{"book_id":"10","category_id":"20"}
+```
+
+For example, `{"id":"42"}` is encoded as `%7B%22id%22%3A%2242%22%7D`. Missing, null, additional or unknown key fields return `INVALID_RECORD_KEY`.
+
+The request and success bodies have the same shape as creation. An empty `values` object is rejected. Updates have **last write wins** semantics: there is no version column, optimistic lock or concurrent-change detection in this iteration.
+
+### Mutation errors
+
+The error envelope is shared with read endpoints. Validation and some constraint errors additionally include `field_errors`, keyed by column name:
+
+```json
+{
+  "error": {
+    "code": "INVALID_RECORD",
+    "message": "Record validation failed",
+    "field_errors": {"published_on": "Expected a date in YYYY-MM-DD format"}
+  }
+}
+```
+
+- HTTP 400: `INVALID_RECORD`, `INVALID_RECORD_KEY`, `NOT_NULL_VIOLATION`, `FOREIGN_KEY_VIOLATION` or `CHECK_VIOLATION`.
+- HTTP 403: `TARGET_READ_ONLY` when `TARGET_WRITE_DATABASE_URL` is absent. The read pool remains read-only.
+- HTTP 404: `RESOURCE_NOT_FOUND` or `RECORD_NOT_FOUND`.
+- HTTP 409: `RESOURCE_READ_ONLY` or `UNIQUE_VIOLATION`.
+- HTTP 503: `TARGET_NOT_CONFIGURED`.
+- HTTP 500: `SCHEMA_INTROSPECTION_FAILED` or `RECORD_MUTATION_FAILED`.
+
+Constraint responses use generic messages and do not expose SQL, stack traces or server-internal details. Mutation requests are limited to 1 MiB and have a 10-second backend timeout. Delete endpoints are not implemented.
 
 ## GET /readyz
 

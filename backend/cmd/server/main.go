@@ -31,7 +31,7 @@ func run() error {
 		return fmt.Errorf("load configuration: %w", err)
 	}
 
-	adminDatabase, targetDatabase, err := database.NewPools(context.Background(), cfg.AdminDatabaseURL, cfg.TargetDatabaseURL)
+	adminDatabase, targetDatabase, targetWriteDatabase, err := database.NewPools(context.Background(), cfg.AdminDatabaseURL, cfg.TargetDatabaseURL, cfg.TargetWriteDatabaseURL)
 	if err != nil {
 		return err
 	}
@@ -39,10 +39,17 @@ func run() error {
 	if targetDatabase != nil {
 		defer targetDatabase.Close()
 	}
+	if targetWriteDatabase != nil {
+		defer targetWriteDatabase.Close()
+	}
 
-	router := httpapi.NewRouter(adminDatabase, nil, nil, nil)
+	var writer *records.Writer
+	if targetWriteDatabase != nil {
+		writer = records.NewWriter(targetWriteDatabase)
+	}
+	router := httpapi.NewRouterWithWriter(adminDatabase, nil, nil, nil, writer)
 	if targetDatabase != nil {
-		router = httpapi.NewRouter(adminDatabase, targetDatabase, introspection.New(targetDatabase), records.New(targetDatabase))
+		router = httpapi.NewRouterWithWriter(adminDatabase, targetDatabase, introspection.New(targetDatabase), records.New(targetDatabase), writer)
 	}
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,

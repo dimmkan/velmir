@@ -512,6 +512,151 @@ select:disabled {
   gap: 8px;
 }
 
+.record-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+}
+
+.read-only-notice {
+  margin: 0;
+  padding: 10px 14px;
+  color: #526789;
+  background: #edf2fb;
+  border-radius: 8px;
+  font-size: 0.875rem;
+}
+
+.record-form-panel {
+  padding: 24px;
+  background: #ffffff;
+  border: 1px solid #cbd6e5;
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgb(30 55 90 / 8%);
+}
+
+.record-form-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.record-form-heading h3 {
+  margin: 0;
+}
+
+.form-close {
+  padding: 0 6px;
+  color: #697586;
+  background: transparent;
+  border: 0;
+  font-size: 1.6rem;
+  cursor: pointer;
+}
+
+.form-server-error {
+  margin-bottom: 20px;
+  padding: 12px 14px;
+  color: #8d302b;
+  background: #fff8f7;
+  border: 1px solid #f1c5c1;
+  border-radius: 8px;
+}
+
+.form-server-error p {
+  margin: 6px 0;
+}
+
+.record-form {
+  display: grid;
+  gap: 18px;
+}
+
+.record-form-field {
+  display: grid;
+  gap: 7px;
+}
+
+.field-label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.field-badge,
+.field-required {
+  color: #526789;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.field-required {
+  color: #8d302b;
+}
+
+.field-options label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #697586;
+  font-size: 0.8rem;
+}
+
+.field-options input {
+  min-height: auto;
+  width: auto;
+}
+
+.record-form textarea {
+  width: 100%;
+  padding: 10px;
+  color: #172033;
+  background: #ffffff;
+  border: 1px solid #cbd6e5;
+  border-radius: 6px;
+  font: inherit;
+  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  font-size: 0.875rem;
+  resize: vertical;
+}
+
+.record-form input:disabled,
+.record-form select:disabled,
+.record-form textarea:disabled {
+  color: #697586;
+  background: #f3f6fb;
+}
+
+.field-error {
+  margin: 0;
+  color: #a0322c;
+  font-size: 0.8rem;
+}
+
+.record-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding-top: 8px;
+}
+
+.unsaved-label {
+  color: #85620e;
+  font-size: 0.8rem;
+}
+
+.record-action-cell {
+  min-width: 90px;
+}
+
 @media (max-width: 800px) {
   .app-layout {
     grid-template-columns: 1fr;

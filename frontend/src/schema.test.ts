@@ -8,6 +8,7 @@ describe('fetchSchema', () => {
 
   it('loads schema metadata', async () => {
     const body: SchemaResponse = {
+      write_enabled: true,
       schemas: [
         {
           name: 'public',
@@ -15,7 +16,7 @@ describe('fetchSchema', () => {
             {
               name: 'items',
               kind: 'table',
-              columns: [{ name: 'id', data_type: 'bigint', nullable: false, default: null }],
+              columns: [{ name: 'id', data_type: 'bigint', nullable: false, default: null, primary_key: true, identity: 'always', generated: false, editable: false, enum_values: [] }],
               primary_key: ['id'],
               foreign_keys: [],
             },

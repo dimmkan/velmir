@@ -1,5 +1,6 @@
 export interface SchemaResponse {
   schemas: SchemaMetadata[]
+  write_enabled: boolean
 }
 
 export interface SchemaMetadata {
@@ -20,6 +21,11 @@ export interface ColumnMetadata {
   data_type: string
   nullable: boolean
   default: string | null
+  primary_key: boolean
+  identity: '' | 'always' | 'by_default'
+  generated: boolean
+  editable: boolean
+  enum_values: string[]
 }
 
 export interface ForeignKeyMetadata {
@@ -51,7 +57,12 @@ function isColumn(value: unknown): value is ColumnMetadata {
     typeof value.name === 'string' &&
     typeof value.data_type === 'string' &&
     typeof value.nullable === 'boolean' &&
-    (typeof value.default === 'string' || value.default === null)
+    (typeof value.default === 'string' || value.default === null) &&
+    typeof value.primary_key === 'boolean' &&
+    (value.identity === '' || value.identity === 'always' || value.identity === 'by_default') &&
+    typeof value.generated === 'boolean' &&
+    typeof value.editable === 'boolean' &&
+    isStringArray(value.enum_values)
   )
 }
 
@@ -80,7 +91,7 @@ function isResource(value: unknown): value is ResourceMetadata {
 }
 
 function isSchemaResponse(value: unknown): value is SchemaResponse {
-  if (!isRecord(value) || !Array.isArray(value.schemas)) return false
+  if (!isRecord(value) || !Array.isArray(value.schemas) || typeof value.write_enabled !== 'boolean') return false
   return value.schemas.every(
     (schema) =>
       isRecord(schema) &&

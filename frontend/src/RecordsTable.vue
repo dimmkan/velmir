@@ -16,12 +16,17 @@ import {
   type RecordsResponse,
 } from './records'
 import type { ResourceMetadata } from './schema'
+import RecordForm from './RecordForm.vue'
+import { canCreateRecord, canUpdateRecord, type FormMode } from './recordForm'
+import type { RecordRow } from './records'
 
 const props = defineProps<{
   backendBaseURL: string
   schemaName: string
   resource: ResourceMetadata
+  writeEnabled: boolean
 }>()
+const emit = defineEmits<{ 'dirty-change': [dirty: boolean] }>()
 
 const state = ref<RecordsQueryState>(defaultRecordsQuery())
 const result = ref<RecordsResponse | null>(null)
@@ -35,6 +40,8 @@ const filterOperator = ref<FilterOperator>('is_null')
 const filterValue = ref('')
 const filterBoolean = ref('true')
 const filterNull = ref('true')
+const formMode = ref<FormMode | null>(null)
+const activeRecord = ref<RecordRow | undefined>()
 
 let controller: AbortController | null = null
 let requestID = 0
@@ -50,8 +57,31 @@ const selectedFilterOperators = computed(() =>
 const canAddFilter = computed(() =>
   Boolean(filterColumn.value) && (filterOperator.value === 'is_null' || filterValue.value !== ''),
 )
+const canCreate = computed(() => canCreateRecord(props.writeEnabled, props.resource))
+const canUpdate = computed(() => canUpdateRecord(props.writeEnabled, props.resource))
+
+function openCreateForm() {
+  activeRecord.value = undefined
+  formMode.value = 'create'
+}
+
+function openEditForm(record: RecordRow) {
+  activeRecord.value = record
+  formMode.value = 'edit'
+}
+
+function closeForm() {
+  formMode.value = null
+  activeRecord.value = undefined
+}
+
+function recordSaved() {
+  closeForm()
+  void loadRecords()
+}
 
 function syncFromURL() {
+  closeForm()
   state.value = parseRecordsQuery(window.location.search, props.resource)
   searchInput.value = state.value.search
   searchColumn.value = state.value.searchColumns.length === 1 ? state.value.searchColumns[0] : ''
@@ -183,6 +213,29 @@ onBeforeUnmount(() => {
 
 <template>
   <section class="records-section" aria-label="Resource records" :aria-busy="loading">
+    <div class="record-controls">
+      <button v-if="canCreate" type="button" class="primary-button" @click="openCreateForm">Create record</button>
+      <p v-if="!writeEnabled" class="read-only-notice">
+        This target is read-only. Set TARGET_WRITE_DATABASE_URL on the backend to enable creating and editing records.
+      </p>
+      <p v-else-if="resource.kind !== 'table'" class="read-only-notice">Views are read-only.</p>
+      <p v-else-if="resource.primary_key.length === 0" class="read-only-notice">
+        This table has no primary key. Creating records is available, but editing is disabled.
+      </p>
+    </div>
+
+    <RecordForm
+      v-if="formMode"
+      :backend-base-u-r-l="backendBaseURL"
+      :schema-name="schemaName"
+      :resource="resource"
+      :mode="formMode"
+      :record="activeRecord"
+      @saved="recordSaved"
+      @cancel="closeForm"
+      @dirty-change="emit('dirty-change', $event)"
+    />
+
     <form class="records-toolbar" @submit.prevent="applySearch">
       <label class="search-field">
         <span>Search</span>
@@ -271,6 +324,7 @@ onBeforeUnmount(() => {
               <span v-else>{{ column.name }}</span>
               <small>{{ column.data_type }}</small>
             </th>
+            <th v-if="canUpdate">Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -280,6 +334,9 @@ onBeforeUnmount(() => {
               :key="column.name"
               :class="{ 'null-value': record[column.name] === null, 'json-value': typeof record[column.name] === 'object' && record[column.name] !== null }"
             >{{ formatRecordValue(record[column.name], column.data_type) }}</td>
+            <td v-if="canUpdate" class="record-action-cell">
+              <button type="button" class="secondary-button" @click="openEditForm(record)">Edit</button>
+            </td>
           </tr>
         </tbody>
       </table>

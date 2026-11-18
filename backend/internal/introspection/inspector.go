@@ -70,7 +70,17 @@ func (i *Inspector) queryColumns(ctx context.Context) ([]columnRow, error) {
 	columns := make([]columnRow, 0)
 	for rows.Next() {
 		var column columnRow
-		if err := rows.Scan(&column.Schema, &column.Resource, &column.Name, &column.DataType, &column.Nullable, &column.Default); err != nil {
+		if err := rows.Scan(
+			&column.Schema,
+			&column.Resource,
+			&column.Name,
+			&column.DataType,
+			&column.Nullable,
+			&column.Default,
+			&column.Identity,
+			&column.Generated,
+			&column.EnumValues,
+		); err != nil {
 			return nil, fmt.Errorf("scan column: %w", err)
 		}
 		columns = append(columns, column)
@@ -150,7 +160,15 @@ SELECT
     a.attname,
     pg_catalog.format_type(a.atttypid, a.atttypmod),
     NOT a.attnotnull,
-    pg_catalog.pg_get_expr(d.adbin, d.adrelid)
+    pg_catalog.pg_get_expr(d.adbin, d.adrelid),
+    CASE a.attidentity WHEN 'a' THEN 'always' WHEN 'd' THEN 'by_default' ELSE '' END,
+    a.attgenerated <> '',
+    COALESCE(
+        (SELECT array_agg(e.enumlabel ORDER BY e.enumsortorder)
+         FROM pg_catalog.pg_enum e
+         WHERE e.enumtypid = a.atttypid),
+        '{}'
+    )
 FROM pg_catalog.pg_attribute a
 JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
 JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace

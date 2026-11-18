@@ -10,9 +10,10 @@ import (
 const defaultHTTPAddr = "127.0.0.1:8080"
 
 type Config struct {
-	TargetDatabaseURL string
-	AdminDatabaseURL  string
-	HTTPAddr          string
+	TargetDatabaseURL      string
+	TargetWriteDatabaseURL string
+	AdminDatabaseURL       string
+	HTTPAddr               string
 }
 
 func Load() (Config, error) {
@@ -31,8 +32,9 @@ func Load() (Config, error) {
 	}
 
 	return Config{
-		TargetDatabaseURL: os.Getenv("TARGET_DATABASE_URL"),
-		AdminDatabaseURL:  adminDatabaseURL,
-		HTTPAddr:          httpAddr,
+		TargetDatabaseURL:      os.Getenv("TARGET_DATABASE_URL"),
+		TargetWriteDatabaseURL: os.Getenv("TARGET_WRITE_DATABASE_URL"),
+		AdminDatabaseURL:       adminDatabaseURL,
+		HTTPAddr:               httpAddr,
 	}, nil
 }

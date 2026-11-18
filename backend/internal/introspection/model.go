@@ -1,9 +1,13 @@
 package introspection
 
-import "sort"
+import (
+	"sort"
+	"strings"
+)
 
 type Catalog struct {
-	Schemas []Schema `json:"schemas"`
+	Schemas      []Schema `json:"schemas"`
+	WriteEnabled bool     `json:"write_enabled"`
 }
 
 type Schema struct {
@@ -20,10 +24,15 @@ type Resource struct {
 }
 
 type Column struct {
-	Name     string  `json:"name"`
-	DataType string  `json:"data_type"`
-	Nullable bool    `json:"nullable"`
-	Default  *string `json:"default"`
+	Name       string   `json:"name"`
+	DataType   string   `json:"data_type"`
+	Nullable   bool     `json:"nullable"`
+	Default    *string  `json:"default"`
+	PrimaryKey bool     `json:"primary_key"`
+	Identity   string   `json:"identity"`
+	Generated  bool     `json:"generated"`
+	Editable   bool     `json:"editable"`
+	EnumValues []string `json:"enum_values"`
 }
 
 type ForeignKey struct {
@@ -55,12 +64,15 @@ type objectRow struct {
 }
 
 type columnRow struct {
-	Schema   string
-	Resource string
-	Name     string
-	DataType string
-	Nullable bool
-	Default  *string
+	Schema     string
+	Resource   string
+	Name       string
+	DataType   string
+	Nullable   bool
+	Default    *string
+	Identity   string
+	Generated  bool
+	EnumValues []string
 }
 
 type primaryKeyRow struct {
@@ -122,11 +134,19 @@ func buildCatalog(objects []objectRow, columns []columnRow, primaryKeys []primar
 		}
 		schemaIndex := schemaIndexes[column.Schema]
 		resource := &catalog.Schemas[schemaIndex].Resources[resourceIndex]
+		enumValues := append([]string(nil), column.EnumValues...)
+		if enumValues == nil {
+			enumValues = make([]string, 0)
+		}
 		resource.Columns = append(resource.Columns, Column{
-			Name:     column.Name,
-			DataType: column.DataType,
-			Nullable: column.Nullable,
-			Default:  column.Default,
+			Name:       column.Name,
+			DataType:   column.DataType,
+			Nullable:   column.Nullable,
+			Default:    column.Default,
+			Identity:   column.Identity,
+			Generated:  column.Generated,
+			Editable:   resource.Kind == "table" && !column.Generated && column.Identity != "always" && supportsMutationType(column.DataType, enumValues),
+			EnumValues: enumValues,
 		})
 	}
 
@@ -142,6 +162,11 @@ func buildCatalog(objects []objectRow, columns []columnRow, primaryKeys []primar
 		schemaIndex := schemaIndexes[primaryKey.Schema]
 		resource := &catalog.Schemas[schemaIndex].Resources[resourceIndex]
 		resource.PrimaryKey = append(resource.PrimaryKey, primaryKey.Column)
+		for index := range resource.Columns {
+			if resource.Columns[index].Name == primaryKey.Column {
+				resource.Columns[index].PrimaryKey = true
+			}
+		}
 	}
 
 	for _, foreignKey := range foreignKeys {
@@ -186,4 +211,23 @@ func buildCatalog(objects []objectRow, columns []columnRow, primaryKeys []primar
 
 func isSystemSchema(name string) bool {
 	return name == "information_schema" || len(name) >= 3 && name[:3] == "pg_"
+}
+
+func supportsMutationType(dataType string, enumValues []string) bool {
+	if len(enumValues) > 0 {
+		return true
+	}
+	normalized := strings.ToLower(strings.TrimSpace(dataType))
+	if index := strings.IndexByte(normalized, '('); index >= 0 {
+		normalized = normalized[:index]
+	}
+	switch strings.TrimSpace(normalized) {
+	case "text", "character varying", "character", "citext", "name",
+		"boolean", "smallint", "integer", "bigint", "real", "double precision",
+		"numeric", "decimal", "date", "timestamp without time zone",
+		"timestamp with time zone", "uuid", "json", "jsonb":
+		return true
+	default:
+		return false
+	}
 }

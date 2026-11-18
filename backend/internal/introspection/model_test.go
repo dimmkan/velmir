@@ -14,8 +14,8 @@ func TestBuildCatalogTransformsAndGroupsMetadata(t *testing.T) {
 		{Schema: "pg_catalog", Name: "pg_class", Kind: "view"},
 	}
 	columns := []columnRow{
-		{Schema: "public", Resource: "books", Name: "id", DataType: "bigint", Nullable: false, Default: &defaultID},
-		{Schema: "public", Resource: "books", Name: "author_id", DataType: "bigint", Nullable: false},
+		{Schema: "public", Resource: "books", Name: "id", DataType: "bigint", Nullable: false, Default: &defaultID, Identity: "always", EnumValues: []string{}},
+		{Schema: "public", Resource: "books", Name: "author_id", DataType: "bigint", Nullable: false, EnumValues: []string{}},
 		{Schema: "public", Resource: "books_overview", Name: "title", DataType: "character varying(255)", Nullable: true},
 		{Schema: "archive", Resource: "old_books", Name: "id", DataType: "bigint", Nullable: false},
 		{Schema: "pg_catalog", Resource: "pg_class", Name: "oid", DataType: "oid", Nullable: false},
@@ -42,6 +42,12 @@ func TestBuildCatalogTransformsAndGroupsMetadata(t *testing.T) {
 	}
 	if len(books.Columns) != 2 || books.Columns[0].Default == nil || *books.Columns[0].Default != defaultID {
 		t.Errorf("books columns = %+v", books.Columns)
+	}
+	if books.Columns[0].Editable || books.Columns[0].Identity != "always" || !books.Columns[0].PrimaryKey || !books.Columns[1].Editable {
+		t.Errorf("column editability metadata = %+v", books.Columns)
+	}
+	if books.Columns[0].EnumValues == nil {
+		t.Error("enum_values must be an empty array")
 	}
 	if !reflect.DeepEqual(books.PrimaryKey, []string{"id"}) {
 		t.Errorf("primary key = %v", books.PrimaryKey)

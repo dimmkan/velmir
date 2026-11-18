@@ -18,6 +18,7 @@ const readiness = ref<ReadinessResponse | null>(null)
 const schemaViewState = ref<SchemaViewState>('loading')
 const catalog = ref<SchemaResponse | null>(null)
 const selectedResourceKey = ref('')
+const formDirty = ref(false)
 
 const databaseStateLabels: Record<DatabaseState, string> = {
   ready: 'Ready',
@@ -113,6 +114,8 @@ function restoreResourceFromURL() {
 }
 
 function selectResource(schema: string, resource: string, push = true) {
+  if (push && formDirty.value && selectedResourceKey.value !== resourceKey(schema, resource) && !window.confirm('Discard unsaved changes?')) return
+  formDirty.value = false
   const url = new URL(window.location.href)
   url.searchParams.set('schema', schema)
   url.searchParams.set('resource', resource)
@@ -139,7 +142,7 @@ onBeforeUnmount(() => window.removeEventListener('popstate', restoreResourceFrom
       <div class="brand">
         <p class="eyebrow">PostgreSQL admin panel</p>
         <h1>Velmir</h1>
-        <p>Read-only database records</p>
+        <p>Metadata-driven database records</p>
       </div>
 
       <div class="sidebar-content">
@@ -205,12 +208,14 @@ onBeforeUnmount(() => window.removeEventListener('popstate', restoreResourceFrom
             <h2>{{ selectedResource.name }}</h2>
             <span class="kind-badge">{{ selectedResource.kind }}</span>
           </div>
-          <p>Metadata-driven records · read-only</p>
+          <p>Metadata-driven records · {{ catalog?.write_enabled ? 'read and write' : 'read-only' }}</p>
         </header>
         <RecordsTable
           :backend-base-u-r-l="backendBaseURL"
           :schema-name="selectedSchemaName"
           :resource="selectedResource"
+          :write-enabled="catalog?.write_enabled ?? false"
+          @dirty-change="formDirty = $event"
         />
       </template>
 
