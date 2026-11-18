@@ -38,7 +38,7 @@ func (s *fakeAuthService) Logout(_ context.Context, token string) error {
 
 func TestProtectedAPIReturnsJSON401(t *testing.T) {
 	service := &fakeAuthService{}
-	router := NewRouter(nil, nil, nil, nil, nil, service, false)
+	router := NewRouter(nil, nil, nil, nil, nil, service, testPermissionProvider{permissions: adminTestPermissions()}, false)
 	for _, target := range []string{"/api/schema", "/api/resources/public/items/records", "/api/auth/me"} {
 		request := httptest.NewRequest(http.MethodGet, target, nil)
 		response := httptest.NewRecorder()
@@ -58,7 +58,7 @@ func TestProtectedAPIReturnsJSON401(t *testing.T) {
 
 func TestHealthzDoesNotRequireAuthentication(t *testing.T) {
 	response := httptest.NewRecorder()
-	NewRouter(nil, nil, nil, nil, nil, &fakeAuthService{authErr: auth.ErrUnauthorized}, false).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	NewRouter(nil, nil, nil, nil, nil, &fakeAuthService{authErr: auth.ErrUnauthorized}, testPermissionProvider{}, false).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d", response.Code)
 	}
@@ -68,7 +68,7 @@ func TestLoginSetsSecureCookiesAndReturnsCSRF(t *testing.T) {
 	service := &fakeAuthService{loginResult: auth.LoginResult{Token: "random-test-session-token", User: testUser()}}
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(`{"email":"admin@example.test","password":"not-logged"}`))
-	NewRouter(nil, nil, nil, nil, nil, service, true).ServeHTTP(response, request)
+	NewRouter(nil, nil, nil, nil, nil, service, testPermissionProvider{permissions: adminTestPermissions()}, true).ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
@@ -105,7 +105,7 @@ func TestLoginUsesSameGenericCredentialError(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		service := &fakeAuthService{loginErr: auth.ErrInvalidCredentials}
 		response := httptest.NewRecorder()
-		NewRouter(nil, nil, nil, nil, nil, service, false).ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(`{"email":"unknown@example.test","password":"wrong"}`)))
+		NewRouter(nil, nil, nil, nil, nil, service, testPermissionProvider{permissions: adminTestPermissions()}, false).ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(`{"email":"unknown@example.test","password":"wrong"}`)))
 		if response.Code != http.StatusUnauthorized {
 			t.Fatalf("status = %d", response.Code)
 		}
@@ -120,7 +120,7 @@ func TestMeRequiresSessionAndInitializesCSRF(t *testing.T) {
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
 	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "session"})
-	NewRouter(nil, nil, nil, nil, nil, &fakeAuthService{}, false).ServeHTTP(response, request)
+	NewRouter(nil, nil, nil, nil, nil, &fakeAuthService{}, testPermissionProvider{permissions: adminTestPermissions()}, false).ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
@@ -150,7 +150,7 @@ func TestMutationRequiresMatchingCSRFCookieAndHeader(t *testing.T) {
 			if test.header != "" {
 				request.Header.Set(csrfHeaderName, test.header)
 			}
-			NewRouter(nil, nil, recordsInspector(), nil, nil, &fakeAuthService{}, false).ServeHTTP(response, request)
+			NewRouter(nil, nil, recordsInspector(), nil, nil, &fakeAuthService{}, testPermissionProvider{permissions: adminTestPermissions()}, false).ServeHTTP(response, request)
 			if response.Code != http.StatusForbidden || !strings.Contains(response.Body.String(), "CSRF_TOKEN_INVALID") {
 				t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 			}
@@ -165,7 +165,7 @@ func TestLogoutRevokesCurrentSessionAndClearsCookies(t *testing.T) {
 	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "current-session"})
 	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: testCSRFToken})
 	request.Header.Set(csrfHeaderName, testCSRFToken)
-	NewRouter(nil, nil, nil, nil, nil, service, false).ServeHTTP(response, request)
+	NewRouter(nil, nil, nil, nil, nil, service, testPermissionProvider{permissions: adminTestPermissions()}, false).ServeHTTP(response, request)
 	if response.Code != http.StatusNoContent || service.logoutToken != "current-session" {
 		t.Fatalf("status = %d, token = %q, body = %s", response.Code, service.logoutToken, response.Body.String())
 	}
@@ -180,7 +180,7 @@ func TestAuthenticationFailureDoesNotLeakInternals(t *testing.T) {
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/schema", nil)
 	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "session"})
-	NewRouter(nil, nil, nil, nil, nil, &fakeAuthService{authErr: errors.New("secret connection details")}, false).ServeHTTP(response, request)
+	NewRouter(nil, nil, nil, nil, nil, &fakeAuthService{authErr: errors.New("secret connection details")}, testPermissionProvider{}, false).ServeHTTP(response, request)
 	if response.Code != http.StatusInternalServerError || strings.Contains(response.Body.String(), "secret") {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}

@@ -164,12 +164,14 @@ describe('record form validation', () => {
 })
 
 describe('read-only state', () => {
-  it('hides all mutations without write configuration and updates without a primary key', () => {
-    expect(canCreateRecord(false, resource)).toBe(false)
-    expect(canUpdateRecord(false, resource)).toBe(false)
-    expect(canCreateRecord(true, resource)).toBe(true)
-    expect(canUpdateRecord(true, resource)).toBe(true)
-    expect(canUpdateRecord(true, { ...resource, primary_key: [] })).toBe(false)
-    expect(canCreateRecord(true, { ...resource, kind: 'view' })).toBe(false)
+  it('hides controls without permissions, write configuration or supported resource metadata', () => {
+    expect(canCreateRecord(true, resource, false)).toBe(false)
+    expect(canUpdateRecord(true, resource, false)).toBe(false)
+    expect(canCreateRecord(false, resource, true)).toBe(false)
+    expect(canUpdateRecord(false, resource, true)).toBe(false)
+    expect(canCreateRecord(true, resource, true)).toBe(true)
+    expect(canUpdateRecord(true, resource, true)).toBe(true)
+    expect(canUpdateRecord(true, { ...resource, primary_key: [] }, true)).toBe(false)
+    expect(canCreateRecord(true, { ...resource, kind: 'view' }, true)).toBe(false)
   })
 })

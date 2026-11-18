@@ -15,7 +15,9 @@
 }
 ```
 
-All authenticated users currently have full administrator access. RBAC, roles and per-resource permissions are not implemented in this stage. This is a temporary limitation; frontend controls are not an authorization boundary. Registration, user management UI and DELETE endpoints are not available.
+Access is denied by default and enforced by the backend independently of the frontend. A user can have multiple roles, whose permissions are unioned. The `admin` system role grants `read`, `create` and `update` on every resource; `viewer` grants only `read`. A resource-level grant consists of a schema, resource and operation; `*` in system roles matches every schema and resource. Unknown roles and missing roles grant no additional access.
+
+An authenticated user without the required permission receives HTTP 403 with code `FORBIDDEN`, distinct from HTTP 401 for a missing session and from `CSRF_TOKEN_INVALID`. `GET /api/auth/me` remains available and returns an empty permissions list to a user without a role. Registration, user/role management UI and DELETE endpoints are unavailable.
 
 ### POST /api/auth/login
 
@@ -37,7 +39,14 @@ A successful response is HTTP 200:
     "email": "admin@example.com",
     "display_name": "Administrator"
   },
-  "csrf_token": "a-random-token-returned-by-the-server"
+  "csrf_token": "a-random-token-returned-by-the-server",
+  "permissions": [
+    {
+      "schema": "*",
+      "resource": "*",
+      "operations": ["read", "create", "update"]
+    }
+  ]
 }
 ```
 
@@ -47,7 +56,7 @@ Unknown email addresses, incorrect passwords and inactive accounts return the sa
 
 ### GET /api/auth/me
 
-Returns HTTP 200 with the current user and CSRF token in the same shape as login. It also refreshes the idle session expiration. A missing CSRF cookie is replaced. HTTP 401 means the session is missing, revoked, idle-expired or absolute-expired.
+Returns HTTP 200 with the current user, CSRF token and effective permissions in the same shape as login. Each permissions entry contains `schema`, `resource` and an `operations` array; duplicate grants from multiple roles are already merged. A user without a role receives `"permissions": []`. The endpoint refreshes idle session expiration. A missing CSRF cookie is replaced. HTTP 401 means the session is missing, revoked, idle-expired or absolute-expired.
 
 ### POST /api/auth/logout
 
@@ -64,7 +73,7 @@ For record POST/PATCH requests and logout, send the login/me CSRF value in `X-CS
 
 ## GET /api/schema
 
-Returns user schemas, tables and views from the configured target database. System schemas are excluded. The endpoint reads PostgreSQL metadata only.
+Returns only tables and views for which the current user has `read`. Inaccessible resources, schemas left empty by filtering and foreign keys referencing inaccessible resources are omitted. PostgreSQL system schemas are also excluded. Without any `read` grant, the endpoint returns HTTP 403 `FORBIDDEN` before introspection.
 
 Successful response (HTTP 200):
 
@@ -110,7 +119,7 @@ Successful response (HTTP 200):
 
 `kind` is `table` or `view`. `default` is `null` when no default exists. `primary_key` marks a key column. `identity` is an empty string, `always` or `by_default`; `generated` marks generated columns. `editable` is true only for supported, non-generated table columns (an `always` identity is not editable). `enum_values` contains allowed labels for enum types and is empty otherwise. Composite primary and foreign keys preserve column order. Empty collections are returned as arrays.
 
-`write_enabled` reports whether the optional target write pool is configured. It does not guarantee that every resource or column is writable.
+`write_enabled` is true only when the optional target write pool is configured and the current user has at least one `create` or `update` grant. It does not guarantee that every resource or column is writable; frontend controls additionally use effective permissions.
 
 If no target database is configured, the endpoint returns HTTP 503:
 
@@ -129,7 +138,7 @@ Other introspection failures return HTTP 500 with code `SCHEMA_INTROSPECTION_FAI
 
 Returns one page of records from a table or view. `schema` and `resource` must exactly match metadata returned by `GET /api/schema`; URL path encoding is supported. Every request uses fresh introspection metadata. Unknown schemas, resources and columns are rejected before SQL execution.
 
-The endpoint is read-only. Dynamic identifiers are quoted after metadata validation, and all search and filter values are sent as PostgreSQL query parameters. SQL expressions in `sort`, `direction`, `search`, `search_column` and `filter` are not supported.
+The endpoint is read-only and requires `read` on the requested resource; otherwise it returns HTTP 403 `FORBIDDEN` before introspection. Dynamic identifiers are quoted after metadata validation, and all search and filter values are sent as PostgreSQL query parameters. SQL expressions in `sort`, `direction`, `search`, `search_column` and `filter` are not supported.
 
 ### Query parameters
 
@@ -221,7 +230,7 @@ Records and introspection queries have a 10-second backend timeout and use the r
 
 ## POST /api/resources/{schema}/{resource}/records
 
-Creates a record in a table. This endpoint is available only when `TARGET_WRITE_DATABASE_URL` is configured; introspection and identifier validation still use fresh metadata read through `TARGET_DATABASE_URL`.
+Creates a record in a table. It requires `create` on the resource and a valid CSRF token; without the permission it returns HTTP 403 `FORBIDDEN`. This endpoint is available only when `TARGET_WRITE_DATABASE_URL` is configured; introspection and identifier validation still use fresh metadata read through `TARGET_DATABASE_URL`.
 
 Request body:
 
@@ -255,7 +264,7 @@ Successful response is HTTP 201. PostgreSQL `RETURNING` provides the complete sa
 
 ## PATCH /api/resources/{schema}/{resource}/records/{key}
 
-Updates only the supplied editable, non-primary-key fields and returns the complete updated record with HTTP 200. Views and tables without a primary key are read-only for updates. Primary-key updates are not supported.
+Updates only the supplied editable, non-primary-key fields and returns the complete updated record with HTTP 200. It requires `update` and a valid CSRF token; without the permission it returns HTTP 403 `FORBIDDEN`. Views and tables without a primary key are read-only for updates. Primary-key updates are not supported.
 
 `{key}` is a **URL-encoded JSON object** containing exactly the resource's primary-key columns. Object order is not significant. Values use the request JSON representation, including strings for bigint and numeric keys. Examples before URL encoding:
 
@@ -286,7 +295,7 @@ The error envelope is shared with read endpoints. Validation and some constraint
 ```
 
 - HTTP 400: `INVALID_RECORD`, `INVALID_RECORD_KEY`, `NOT_NULL_VIOLATION`, `FOREIGN_KEY_VIOLATION` or `CHECK_VIOLATION`.
-- HTTP 403: `TARGET_READ_ONLY` when `TARGET_WRITE_DATABASE_URL` is absent. The read pool remains read-only.
+- HTTP 403: `FORBIDDEN` when the required permission is missing; `CSRF_TOKEN_INVALID` for a missing or invalid CSRF token; `TARGET_READ_ONLY` when `TARGET_WRITE_DATABASE_URL` is absent. The read pool remains read-only.
 - HTTP 404: `RESOURCE_NOT_FOUND` or `RECORD_NOT_FOUND`.
 - HTTP 409: `RESOURCE_READ_ONLY` or `UNIQUE_VIOLATION`.
 - HTTP 503: `TARGET_NOT_CONFIGURED`.

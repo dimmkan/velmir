@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { authState } from './auth'
 import { fetchSchema, SchemaRequestError, type SchemaResponse } from './schema'
 
 describe('fetchSchema', () => {
@@ -36,5 +37,21 @@ describe('fetchSchema', () => {
     const request = fetchSchema('')
     await expect(request).rejects.toBeInstanceOf(SchemaRequestError)
     await expect(request).rejects.toMatchObject({ code: 'TARGET_NOT_CONFIGURED' })
+  })
+})
+
+
+describe('schema authorization errors', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('keeps the session authenticated on 403 and exposes a Forbidden error', async () => {
+    authState.status = 'authenticated'
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      error: { code: 'FORBIDDEN', message: 'Permission denied' },
+    }), { status: 403 })))
+
+    const request = fetchSchema('')
+    await expect(request).rejects.toMatchObject({ code: 'FORBIDDEN', status: 403 })
+    expect(authState.status).toBe('authenticated')
   })
 })

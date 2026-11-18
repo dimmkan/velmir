@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"velmir/backend/internal/authorization"
 	"velmir/backend/internal/introspection"
 	"velmir/backend/internal/records"
 )
@@ -58,19 +59,20 @@ type mutationRequest struct {
 	Values records.RecordValues `json:"values"`
 }
 
-func NewRouter(adminDatabase, targetDatabase databasePinger, inspector schemaInspector, lister recordLister, writer recordWriter, authService authService, secureCookies bool) http.Handler {
+func NewRouter(adminDatabase, targetDatabase databasePinger, inspector schemaInspector, lister recordLister, writer recordWriter, authService authService, permissions permissionProvider, secureCookies bool) http.Handler {
 	router := chi.NewRouter()
 	router.Get("/healthz", healthz)
 	router.Get("/readyz", readyz(adminDatabase, targetDatabase))
-	router.Post("/api/auth/login", login(authService, secureCookies))
+	router.Post("/api/auth/login", login(authService, permissions, secureCookies))
 	router.Group(func(r chi.Router) {
 		r.Use(requireAuth(authService))
+		r.Use(loadPermissions(permissions))
 		r.Get("/api/auth/me", me(secureCookies))
 		r.With(requireCSRF).Post("/api/auth/logout", logout(authService, secureCookies))
-		r.Get("/api/schema", schema(inspector, writer != nil))
-		r.Get("/api/resources/{schema}/{resource}/records", listRecords(inspector, lister))
-		r.With(requireCSRF).Post("/api/resources/{schema}/{resource}/records", createRecord(inspector, writer))
-		r.With(requireCSRF).Patch("/api/resources/{schema}/{resource}/records/{key}", updateRecord(inspector, writer))
+		r.With(requireAnyPermission(authorization.Read)).Get("/api/schema", schema(inspector, writer != nil))
+		r.With(requireResourcePermission(authorization.Read)).Get("/api/resources/{schema}/{resource}/records", listRecords(inspector, lister))
+		r.With(requireCSRF, requireResourcePermission(authorization.Create)).Post("/api/resources/{schema}/{resource}/records", createRecord(inspector, writer))
+		r.With(requireCSRF, requireResourcePermission(authorization.Update)).Patch("/api/resources/{schema}/{resource}/records/{key}", updateRecord(inspector, writer))
 	})
 	router.NotFound(func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusNotFound, errorResponse{Error: apiError{Code: "NOT_FOUND", Message: "Endpoint not found"}})
@@ -119,9 +121,39 @@ func schema(inspector schemaInspector, writeEnabled bool) http.HandlerFunc {
 			}})
 			return
 		}
-		catalog.WriteEnabled = writeEnabled
+		permissions := currentPermissions(r)
+		catalog = filterReadableCatalog(catalog, permissions)
+		catalog.WriteEnabled = writeEnabled && permissions.HasAny(authorization.Create, authorization.Update)
 		writeJSON(w, http.StatusOK, catalog)
 	}
+}
+
+func filterReadableCatalog(catalog introspection.Catalog, permissions authorization.Permissions) introspection.Catalog {
+	filtered := introspection.Catalog{Schemas: make([]introspection.Schema, 0)}
+	for _, schema := range catalog.Schemas {
+		schemaCopy := introspection.Schema{Name: schema.Name, Resources: make([]introspection.Resource, 0)}
+		for _, resource := range schema.Resources {
+			if !permissions.Allows(schema.Name, resource.Name, authorization.Read) {
+				continue
+			}
+			resource.ForeignKeys = filterReadableForeignKeys(resource.ForeignKeys, permissions)
+			schemaCopy.Resources = append(schemaCopy.Resources, resource)
+		}
+		if len(schemaCopy.Resources) > 0 {
+			filtered.Schemas = append(filtered.Schemas, schemaCopy)
+		}
+	}
+	return filtered
+}
+
+func filterReadableForeignKeys(foreignKeys []introspection.ForeignKey, permissions authorization.Permissions) []introspection.ForeignKey {
+	filtered := make([]introspection.ForeignKey, 0, len(foreignKeys))
+	for _, foreignKey := range foreignKeys {
+		if permissions.Allows(foreignKey.ReferencedSchema, foreignKey.ReferencedTable, authorization.Read) {
+			filtered = append(filtered, foreignKey)
+		}
+	}
+	return filtered
 }
 
 func listRecords(inspector schemaInspector, lister recordLister) http.HandlerFunc {

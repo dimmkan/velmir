@@ -33,7 +33,7 @@ export interface RecordsResponse {
 }
 
 export class RecordsRequestError extends Error {
-  constructor(readonly code: string, message: string) {
+  constructor(readonly code: string, message: string, readonly status: number) {
     super(message)
     this.name = 'RecordsRequestError'
   }
@@ -147,7 +147,7 @@ export async function fetchRecords(
   if (response.status === 401) handleUnauthorized()
   if (!response.ok) {
     const error = readError(body)
-    throw new RecordsRequestError(error.code, error.message)
+    throw new RecordsRequestError(error.code, error.message, response.status)
   }
   if (!isRecordsResponse(body)) throw new Error('Invalid records response')
   return body

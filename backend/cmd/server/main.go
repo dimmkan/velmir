@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"velmir/backend/internal/auth"
+	"velmir/backend/internal/authorization"
 	"velmir/backend/internal/config"
 	"velmir/backend/internal/database"
 	"velmir/backend/internal/httpapi"
@@ -62,9 +63,10 @@ func run() error {
 	if targetWriteDatabase != nil {
 		writer = records.NewWriter(targetWriteDatabase)
 	}
-	router := httpapi.NewRouter(adminDatabase, nil, nil, nil, writer, authService, cfg.SessionCookieSecure)
+	permissionStore := authorization.NewStore(adminDatabase)
+	router := httpapi.NewRouter(adminDatabase, nil, nil, nil, writer, authService, permissionStore, cfg.SessionCookieSecure)
 	if targetDatabase != nil {
-		router = httpapi.NewRouter(adminDatabase, targetDatabase, introspection.New(targetDatabase), records.New(targetDatabase), writer, authService, cfg.SessionCookieSecure)
+		router = httpapi.NewRouter(adminDatabase, targetDatabase, introspection.New(targetDatabase), records.New(targetDatabase), writer, authService, permissionStore, cfg.SessionCookieSecure)
 	}
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,

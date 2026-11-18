@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { authState, initializeAuth, login, logout } from './auth'
+import { authState, can, initializeAuth, login, logout } from './auth'
 import LoginPage from './LoginPage.vue'
 import RecordsTable from './RecordsTable.vue'
 import { fetchReadiness, type DatabaseState, type ReadinessResponse } from './readiness'
@@ -12,7 +12,7 @@ import {
 } from './schema'
 
 type ViewState = 'loading' | 'ready' | 'error'
-type SchemaViewState = 'loading' | 'ready' | 'empty' | 'not_configured' | 'error'
+type SchemaViewState = 'loading' | 'ready' | 'empty' | 'not_configured' | 'forbidden' | 'error'
 type RouteState = 'loading' | 'login' | 'application' | 'error'
 
 const backendBaseURL = (import.meta.env.VITE_BACKEND_BASE_URL ?? '').replace(/\/+$/, '')
@@ -51,6 +51,11 @@ const selectedSchemaName = computed(() => {
   }
   return ''
 })
+
+const createAllowed = computed(() => Boolean(selectedResource.value) &&
+  can(selectedSchemaName.value, selectedResource.value!.name, 'create'))
+const updateAllowed = computed(() => Boolean(selectedResource.value) &&
+  can(selectedSchemaName.value, selectedResource.value!.name, 'update'))
 
 function resourceKey(schema: string, resource: string) {
   return JSON.stringify([schema, resource])
@@ -99,10 +104,14 @@ async function loadSchema() {
     }
     schemaViewState.value = 'ready'
   } catch (error) {
-    schemaViewState.value =
-      error instanceof SchemaRequestError && error.code === 'TARGET_NOT_CONFIGURED'
-        ? 'not_configured'
-        : 'error'
+    if (error instanceof SchemaRequestError && error.status === 403) {
+      schemaViewState.value = 'forbidden'
+    } else {
+      schemaViewState.value =
+        error instanceof SchemaRequestError && error.code === 'TARGET_NOT_CONFIGURED'
+          ? 'not_configured'
+          : 'error'
+    }
   } finally {
     window.clearTimeout(timeout)
   }
@@ -220,6 +229,9 @@ onBeforeUnmount(() => window.removeEventListener('popstate', handlePopState))
         <div v-else-if="schemaViewState === 'empty'" class="sidebar-message">
           No tables or views found.
         </div>
+        <div v-else-if="schemaViewState === 'forbidden'" class="sidebar-message sidebar-error" role="alert">
+          You do not have permission to read any resources.
+        </div>
         <div v-else-if="schemaViewState === 'error'" class="sidebar-message sidebar-error" role="alert">
           <p>Could not load the schema.</p>
           <button type="button" class="secondary-button" @click="loadSchema">Try again</button>
@@ -291,21 +303,25 @@ onBeforeUnmount(() => window.removeEventListener('popstate', handlePopState))
           :schema-name="selectedSchemaName"
           :resource="selectedResource"
           :write-enabled="catalog?.write_enabled ?? false"
+          :create-allowed="createAllowed"
+          :update-allowed="updateAllowed"
           @dirty-change="formDirty = $event"
         />
       </template>
 
-      <section v-else class="empty-state">
+      <section v-else class="empty-state" :role="schemaViewState === 'forbidden' ? 'alert' : undefined">
         <p class="eyebrow">Database records</p>
         <h2 v-if="schemaViewState === 'loading'">Loading metadata…</h2>
         <h2 v-else-if="schemaViewState === 'not_configured'">Target database is not configured</h2>
         <h2 v-else-if="schemaViewState === 'empty'">No resources found</h2>
+        <h2 v-else-if="schemaViewState === 'forbidden'">Forbidden</h2>
         <h2 v-else-if="schemaViewState === 'error'">Schema unavailable</h2>
         <h2 v-else>Select a resource</h2>
         <p v-if="schemaViewState === 'not_configured'">
           Set TARGET_DATABASE_URL and restart the backend to inspect a database.
         </p>
         <p v-else-if="schemaViewState === 'empty'">The target database has no user tables or views.</p>
+        <p v-else-if="schemaViewState === 'forbidden'">Your account has no role granting read access. Contact an administrator.</p>
         <p v-else-if="schemaViewState === 'error'">Check the backend and target database readiness, then try again.</p>
         <p v-else-if="schemaViewState === 'ready'">Choose a table or view in the sidebar.</p>
       </section>

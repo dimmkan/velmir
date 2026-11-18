@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { authState } from './auth'
 import { buildRecordKey, createRecord, MutationRequestError, updateRecord } from './mutations'
 import type { ResourceMetadata } from './schema'
 
@@ -51,6 +52,26 @@ describe('record mutations', () => {
       headers: expect.objectContaining({ 'X-CSRF-Token': 'test-csrf-token' }),
       credentials: 'same-origin',
       body: '{"values":{"name":"new"}}',
+    }))
+  })
+})
+
+
+describe('mutation authorization errors', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('preserves the authenticated state and valid CSRF flow on 403', async () => {
+    authState.status = 'authenticated'
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      error: { code: 'FORBIDDEN', message: 'Permission denied' },
+    }), { status: 403 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const request = createRecord('', 'public', 'items', { name: 'x' }, 'valid-csrf-token')
+    await expect(request).rejects.toMatchObject({ code: 'FORBIDDEN', status: 403 })
+    expect(authState.status).toBe('authenticated')
+    expect(fetchMock).toHaveBeenCalledWith('/api/resources/public/items/records', expect.objectContaining({
+      headers: expect.objectContaining({ 'X-CSRF-Token': 'valid-csrf-token' }),
     }))
   })
 })

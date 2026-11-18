@@ -6,11 +6,20 @@ export interface AuthUser {
   display_name: string
 }
 
+export type PermissionOperation = 'read' | 'create' | 'update'
+
+export interface ResourcePermission {
+  schema: string
+  resource: string
+  operations: PermissionOperation[]
+}
+
 export type AuthStatus = 'loading' | 'authenticated' | 'anonymous' | 'error'
 
 export interface AuthState {
   status: AuthStatus
   user: AuthUser | null
+  permissions: ResourcePermission[]
   error: string
   loginPending: boolean
   loginError: string
@@ -21,12 +30,27 @@ export interface AuthState {
 interface AuthResponse {
   user: AuthUser
   csrf_token: string
+  permissions: ResourcePermission[]
+}
+
+export function hasPermission(
+  permissions: ResourcePermission[],
+  schema: string,
+  resource: string,
+  operation: PermissionOperation,
+): boolean {
+  return permissions.some((permission) =>
+    (permission.schema === '*' || permission.schema === schema) &&
+    (permission.resource === '*' || permission.resource === resource) &&
+    permission.operations.includes(operation),
+  )
 }
 
 export function createAuthStore(backendBaseURL = '') {
   const state = reactive<AuthState>({
     status: 'loading',
     user: null,
+    permissions: [],
     error: '',
     loginPending: false,
     loginError: '',
@@ -63,6 +87,7 @@ export function createAuthStore(backendBaseURL = '') {
       authenticate(body)
     } catch {
       state.user = null
+      state.permissions = []
       csrfToken = ''
       state.status = 'error'
       state.error = 'Could not contact the backend. Check that it is running and try again.'
@@ -130,6 +155,10 @@ export function createAuthStore(backendBaseURL = '') {
   function authenticate(body: AuthResponse) {
     csrfToken = body.csrf_token
     state.user = body.user
+    state.permissions = body.permissions.map((permission) => ({
+      ...permission,
+      operations: [...permission.operations],
+    }))
     state.status = 'authenticated'
     state.error = ''
     state.loginError = ''
@@ -139,6 +168,7 @@ export function createAuthStore(backendBaseURL = '') {
   function expire() {
     csrfToken = ''
     state.user = null
+    state.permissions = []
     state.status = 'anonymous'
     state.error = ''
     state.loginError = ''
@@ -152,6 +182,8 @@ export function createAuthStore(backendBaseURL = '') {
     logout,
     expire,
     getCSRFToken: () => csrfToken,
+    can: (schema: string, resource: string, operation: PermissionOperation) =>
+      hasPermission(state.permissions, schema, resource, operation),
   }
 }
 
@@ -163,6 +195,7 @@ export const login = authStore.login
 export const logout = authStore.logout
 export const handleUnauthorized = authStore.expire
 export const getCSRFToken = authStore.getCSRFToken
+export const can = authStore.can
 
 function isAuthResponse(value: unknown): value is AuthResponse {
   if (!isRecord(value) || !isRecord(value.user) || typeof value.csrf_token !== 'string' || value.csrf_token === '') return false
@@ -170,8 +203,15 @@ function isAuthResponse(value: unknown): value is AuthResponse {
     typeof value.user.id === 'number' &&
     Number.isSafeInteger(value.user.id) &&
     typeof value.user.email === 'string' &&
-    typeof value.user.display_name === 'string'
+    typeof value.user.display_name === 'string' &&
+    Array.isArray(value.permissions) &&
+    value.permissions.every(isResourcePermission)
   )
+}
+
+function isResourcePermission(value: unknown): value is ResourcePermission {
+  if (!isRecord(value) || typeof value.schema !== 'string' || typeof value.resource !== 'string' || !Array.isArray(value.operations)) return false
+  return value.operations.every((operation) => operation === 'read' || operation === 'create' || operation === 'update')
 }
 
 function readErrorMessage(value: unknown, fallback: string) {

@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createAuthStore, type AuthUser } from './auth'
+import { createAuthStore, hasPermission, type AuthUser, type ResourcePermission } from './auth'
 
 const user: AuthUser = { id: 1, email: 'admin@example.test', display_name: 'Administrator' }
 const csrfToken = 'csrf-token-in-memory-only'
+const adminPermissions: ResourcePermission[] = [{ schema: '*', resource: '*', operations: ['read', 'create', 'update'] }]
 
-function authResponse(status = 200) {
-  return new Response(JSON.stringify({ user, csrf_token: csrfToken }), {
+function authResponse(status = 200, permissions = adminPermissions) {
+  return new Response(JSON.stringify({ user, csrf_token: csrfToken, permissions }), {
     status,
     headers: { 'Content-Type': 'application/json' },
   })
@@ -128,5 +129,43 @@ describe('auth state', () => {
     expect(store.state.status).toBe('anonymous')
     expect(store.state.user).toBeNull()
     expect(store.getCSRFToken()).toBe('')
+  })
+})
+
+
+describe('effective permissions', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('allows admin supported operations and hides them from viewer and a user without roles', async () => {
+    const viewerPermissions: ResourcePermission[] = [{ schema: '*', resource: '*', operations: ['read'] }]
+    for (const test of [
+      { permissions: adminPermissions, create: true, update: true },
+      { permissions: viewerPermissions, create: false, update: false },
+      { permissions: [], create: false, update: false },
+    ]) {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(authResponse(200, test.permissions)))
+      const store = createAuthStore()
+      await store.initialize()
+
+      expect(store.state.status).toBe('authenticated')
+      expect(store.state.permissions).toEqual(test.permissions)
+      expect(store.can('public', 'items', 'read')).toBe(test.permissions.length > 0)
+      expect(store.can('public', 'items', 'create')).toBe(test.create)
+      expect(store.can('public', 'items', 'update')).toBe(test.update)
+    }
+  })
+
+  it('unions roles and matches resource-level and wildcard grants', () => {
+    const permissions: ResourcePermission[] = [
+      { schema: 'public', resource: 'items', operations: ['read'] },
+      { schema: 'public', resource: 'items', operations: ['update'] },
+      { schema: 'archive', resource: '*', operations: ['read'] },
+    ]
+
+    expect(hasPermission(permissions, 'public', 'items', 'read')).toBe(true)
+    expect(hasPermission(permissions, 'public', 'items', 'update')).toBe(true)
+    expect(hasPermission(permissions, 'public', 'items', 'create')).toBe(false)
+    expect(hasPermission(permissions, 'archive', 'old_items', 'read')).toBe(true)
+    expect(hasPermission(permissions, 'private', 'secrets', 'read')).toBe(false)
   })
 })

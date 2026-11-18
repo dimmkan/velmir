@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"velmir/backend/internal/auth"
+	"velmir/backend/internal/authorization"
 )
 
 type testAuthService struct {
@@ -24,6 +25,29 @@ func (s testAuthService) Authenticate(context.Context, string) (auth.User, error
 
 func (s testAuthService) Logout(context.Context, string) error { return nil }
 
+type testPermissionProvider struct {
+	permissions authorization.Permissions
+	err         error
+}
+
+func (s testPermissionProvider) Permissions(context.Context, int64) (authorization.Permissions, error) {
+	return s.permissions, s.err
+}
+
+func adminTestPermissions() authorization.Permissions {
+	return authorization.EffectivePermissions([]authorization.Grant{
+		{Schema: "*", Resource: "*", Operation: authorization.Read},
+		{Schema: "*", Resource: "*", Operation: authorization.Create},
+		{Schema: "*", Resource: "*", Operation: authorization.Update},
+	})
+}
+
+func viewerTestPermissions() authorization.Permissions {
+	return authorization.EffectivePermissions([]authorization.Grant{
+		{Schema: "*", Resource: "*", Operation: authorization.Read},
+	})
+}
+
 func newTestRouter(adminDatabase, targetDatabase databasePinger, inspector schemaInspector, args ...any) http.Handler {
 	var lister recordLister
 	var writer recordWriter
@@ -33,7 +57,7 @@ func newTestRouter(adminDatabase, targetDatabase databasePinger, inspector schem
 	if len(args) > 1 && args[1] != nil {
 		writer = args[1].(recordWriter)
 	}
-	router := NewRouter(adminDatabase, targetDatabase, inspector, lister, writer, testAuthService{user: testUser()}, false)
+	router := NewRouter(adminDatabase, targetDatabase, inspector, lister, writer, testAuthService{user: testUser()}, testPermissionProvider{permissions: adminTestPermissions()}, false)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "test-session"})
 		if r.Method == http.MethodPost || r.Method == http.MethodPatch {

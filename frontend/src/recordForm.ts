@@ -13,12 +13,12 @@ export interface FormFieldState {
 export type RecordFormState = Record<string, FormFieldState>
 export type FormErrors = Record<string, string>
 
-export function canCreateRecord(writeEnabled: boolean, resource: ResourceMetadata): boolean {
-  return writeEnabled && resource.kind === 'table'
+export function canCreateRecord(writeEnabled: boolean, resource: ResourceMetadata, permissionAllowed: boolean): boolean {
+  return permissionAllowed && writeEnabled && resource.kind === 'table'
 }
 
-export function canUpdateRecord(writeEnabled: boolean, resource: ResourceMetadata): boolean {
-  return canCreateRecord(writeEnabled, resource) && resource.primary_key.length > 0 &&
+export function canUpdateRecord(writeEnabled: boolean, resource: ResourceMetadata, permissionAllowed: boolean): boolean {
+  return canCreateRecord(writeEnabled, resource, permissionAllowed) && resource.primary_key.length > 0 &&
     resource.columns.some((column) => column.editable && !column.primary_key)
 }
 

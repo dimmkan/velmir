@@ -33,6 +33,7 @@ let initial: RecordFormState = {}
 const saving = ref(false)
 const serverError = ref('')
 const serverErrorCode = ref('')
+const serverErrorStatus = ref(0)
 const fieldErrors = ref<Record<string, string>>({})
 
 const dirty = computed(() => isFormDirty(state.value, initial))
@@ -42,6 +43,7 @@ function resetForm() {
   state.value = cloneFormState(initial)
   serverError.value = ''
   serverErrorCode.value = ''
+  serverErrorStatus.value = 0
   fieldErrors.value = {}
 }
 
@@ -77,6 +79,7 @@ function editField(field: FormFieldState) {
 async function save() {
   serverError.value = ''
   serverErrorCode.value = ''
+  serverErrorStatus.value = 0
   fieldErrors.value = validateRecordForm(props.mode, props.resource, state.value)
   if (Object.keys(fieldErrors.value).length > 0) {
     const firstInvalid = props.resource.columns.find((column) => fieldErrors.value[column.name])
@@ -102,6 +105,7 @@ async function save() {
     if (error instanceof MutationRequestError) {
       serverError.value = error.message
       serverErrorCode.value = error.code
+      serverErrorStatus.value = error.status
       fieldErrors.value = error.fieldErrors
     } else {
       serverError.value = error instanceof Error ? error.message : 'Could not save the record'
@@ -146,7 +150,7 @@ function baseType(dataType: string): string {
     </div>
 
     <div v-if="serverError" class="form-server-error" role="alert">
-      <strong>Could not save the record</strong>
+      <strong>{{ serverErrorStatus === 403 ? 'Forbidden' : 'Could not save the record' }}</strong>
       <p>{{ serverError }}</p>
       <code v-if="serverErrorCode">{{ serverErrorCode }}</code>
     </div>

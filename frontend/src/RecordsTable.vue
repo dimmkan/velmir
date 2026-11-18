@@ -25,6 +25,8 @@ const props = defineProps<{
   schemaName: string
   resource: ResourceMetadata
   writeEnabled: boolean
+  createAllowed: boolean
+  updateAllowed: boolean
 }>()
 const emit = defineEmits<{ 'dirty-change': [dirty: boolean] }>()
 
@@ -33,6 +35,7 @@ const result = ref<RecordsResponse | null>(null)
 const loading = ref(false)
 const errorMessage = ref('')
 const errorCode = ref('')
+const errorStatus = ref(0)
 const searchInput = ref('')
 const searchColumn = ref('')
 const filterColumn = ref('')
@@ -57,8 +60,9 @@ const selectedFilterOperators = computed(() =>
 const canAddFilter = computed(() =>
   Boolean(filterColumn.value) && (filterOperator.value === 'is_null' || filterValue.value !== ''),
 )
-const canCreate = computed(() => canCreateRecord(props.writeEnabled, props.resource))
-const canUpdate = computed(() => canUpdateRecord(props.writeEnabled, props.resource))
+const canCreate = computed(() => canCreateRecord(props.writeEnabled, props.resource, props.createAllowed))
+const canUpdate = computed(() => canUpdateRecord(props.writeEnabled, props.resource, props.updateAllowed))
+const hasMutationPermission = computed(() => props.createAllowed || props.updateAllowed)
 
 function openCreateForm() {
   activeRecord.value = undefined
@@ -117,6 +121,7 @@ async function loadRecords() {
   loading.value = true
   errorMessage.value = ''
   errorCode.value = ''
+  errorStatus.value = 0
   result.value = null
 
   try {
@@ -132,6 +137,7 @@ async function loadRecords() {
     if (currentRequest !== requestID) return
     if (error instanceof RecordsRequestError) {
       errorCode.value = error.code
+      errorStatus.value = error.status
       errorMessage.value = error.message
     } else if (error instanceof DOMException && error.name === 'AbortError') {
       errorMessage.value = 'The records request was cancelled or timed out.'
@@ -215,12 +221,15 @@ onBeforeUnmount(() => {
   <section class="records-section" aria-label="Resource records" :aria-busy="loading">
     <div class="record-controls">
       <button v-if="canCreate" type="button" class="primary-button" @click="openCreateForm">Create record</button>
-      <p v-if="!writeEnabled" class="read-only-notice">
+      <p v-if="!hasMutationPermission" class="read-only-notice">
+        You have read-only access to this resource. Your roles do not allow creating or editing records.
+      </p>
+      <p v-else-if="!writeEnabled" class="read-only-notice">
         This target is read-only. Set TARGET_WRITE_DATABASE_URL on the backend to enable creating and editing records.
       </p>
       <p v-else-if="resource.kind !== 'table'" class="read-only-notice">Views are read-only.</p>
       <p v-else-if="resource.primary_key.length === 0" class="read-only-notice">
-        This table has no primary key. Creating records is available, but editing is disabled.
+        This table has no primary key. Creating records requires create permission; editing is disabled.
       </p>
     </div>
 
@@ -303,7 +312,7 @@ onBeforeUnmount(() => {
 
     <div v-if="loading" class="records-state" role="status">Loading records…</div>
     <div v-else-if="errorMessage" class="records-state records-error" role="alert">
-      <strong>Could not load records</strong>
+      <strong>{{ errorStatus === 403 ? 'Forbidden' : 'Could not load records' }}</strong>
       <p>{{ errorMessage }}</p>
       <code v-if="errorCode">{{ errorCode }}</code>
       <button type="button" class="secondary-button" @click="loadRecords">Try again</button>

@@ -39,7 +39,7 @@ export interface ForeignKeyMetadata {
 }
 
 export class SchemaRequestError extends Error {
-  constructor(readonly code: string) {
+  constructor(readonly code: string, readonly status: number) {
     super(code)
     this.name = 'SchemaRequestError'
   }
@@ -120,7 +120,7 @@ export async function fetchSchema(backendBaseURL: string, signal?: AbortSignal) 
 
   if (response.status === 401) handleUnauthorized()
   if (!response.ok) {
-    throw new SchemaRequestError(errorCode(body))
+    throw new SchemaRequestError(errorCode(body), response.status)
   }
   if (!isSchemaResponse(body)) {
     throw new Error('Invalid schema response')

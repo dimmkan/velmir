@@ -2,7 +2,7 @@
 
 [Русская версия](README.md)
 
-Velmir is a metadata-driven PostgreSQL admin panel. The current stage provides schema introspection, universal record lists with pagination, sorting, search and typed filters, automatic forms for creating and editing records, and authentication with server-side sessions. Deletion, RBAC, user management UI, relations UI and audit are not implemented.
+Velmir is a metadata-driven PostgreSQL admin panel. The current stage provides schema introspection, universal record lists with pagination, sorting, search and typed filters, automatic forms for creating and editing records, server-side session authentication and RBAC. Deletion, user/role management UI, relations UI and audit are not implemented.
 
 ## Requirements
 
@@ -48,11 +48,30 @@ The application calls `GET /api/auth/me` at startup, redirects anonymous users t
 
 Session cookies use `SameSite=Lax`; idle expiration defaults to `30m` and absolute expiration to `24h`. See `docs/api_en.md` for cookie attributes, configuration and endpoint responses.
 
-**Temporary authorization limitation:** every authenticated user has full administrator access. RBAC, roles and per-resource permissions are not implemented yet; all authorization checks for this stage are enforced by backend authentication middleware, not hidden frontend buttons.
+## Roles, permissions and user management
+
+Access is denied by default. Roles can be combined: a user's effective permissions are the union of every assigned role. The built-in `admin` role allows reading, creating and updating every resource; `viewer` allows reading only. `read`, `create` and `update` grants can target a specific schema and resource. DELETE is unavailable to every role, including `admin`.
+
+The bootstrap administrator receives `admin` automatically. A user created through the CLI receives no role by default and can access only `/api/auth/me` with an empty permissions list; protected resources return 403. The backend filters `/api/schema` by `read`, and the frontend hides unavailable resources and create/update controls. Viewers see an explicit read-only state. User and role management UI is not available yet.
+
+After applying migrations, run these commands from the `backend` directory:
+
+```powershell
+# Create a user; never pass the password as a command-line argument.
+$env:VELMIR_USER_PASSWORD = "<long-random-password>"
+go run ./cmd/users create -email "viewer@example.test" -display-name "Viewer"
+Remove-Item Env:VELMIR_USER_PASSWORD
+
+# Assign a role and list users.
+go run ./cmd/users assign-role -email "viewer@example.test" -role viewer
+go run ./cmd/users list
+```
+
+For a local viewer check, these two commands create the account and assign `viewer`. Sign in using a separate browser profile: schema and records GET are available, while create and edit controls are hidden. Repeating `assign-role` is idempotent; run it again with another role name to assign an additional role. Passwords must contain at least 12 characters, are accepted only through `VELMIR_USER_PASSWORD`, and are stored only as Argon2id hashes. Never put real passwords in documentation or command history.
 
 ## Databases and write safety
 
-- **Admin database** (`localhost:5432`, database `velmir_admin`) belongs to Velmir. Goose migrations run only here and create the `users` and `sessions` tables plus the migration baseline.
+- **Admin database** (`localhost:5432`, database `velmir_admin`) belongs to Velmir. Goose migrations run only here and create the migration baseline plus `users`, `sessions`, `roles`, `user_roles` and `role_permissions`.
 - **Demo target database** (`localhost:5433`, database `velmir_demo`) is a separate PostgreSQL instance. Docker initializes demonstration tables, records, a view, primary keys and foreign keys.
 - `TARGET_DATABASE_URL` is the existing read-only target connection. Its pool always sets `default_transaction_read_only=on`; it is used for introspection and record reads and is never reused for mutations.
 - `TARGET_WRITE_DATABASE_URL` is a separate **optional** connection used only for INSERT and UPDATE. The example points to the local demo writer role. Leave it empty or remove it to disable all mutation controls and make mutation endpoints return `TARGET_READ_ONLY`.

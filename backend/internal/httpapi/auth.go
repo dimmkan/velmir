@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"velmir/backend/internal/auth"
+	"velmir/backend/internal/authorization"
 )
 
 const (
@@ -37,8 +38,9 @@ type userResponse struct {
 }
 
 type authResponse struct {
-	User      userResponse `json:"user"`
-	CSRFToken string       `json:"csrf_token"`
+	User        userResponse              `json:"user"`
+	CSRFToken   string                    `json:"csrf_token"`
+	Permissions authorization.Permissions `json:"permissions"`
 }
 
 type loginRequest struct {
@@ -50,7 +52,7 @@ type contextKey int
 
 const userContextKey contextKey = iota
 
-func login(service authService, secureCookies bool) http.HandlerFunc {
+func login(service authService, provider permissionProvider, secureCookies bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if service == nil {
 			writeJSON(w, http.StatusServiceUnavailable, errorResponse{Error: apiError{Code: "AUTH_UNAVAILABLE", Message: "Authentication is not available"}})
@@ -85,6 +87,17 @@ func login(service authService, secureCookies bool) http.HandlerFunc {
 			writeJSON(w, http.StatusInternalServerError, errorResponse{Error: apiError{Code: "LOGIN_FAILED", Message: "Could not sign in"}})
 			return
 		}
+		if provider == nil {
+			_ = service.Logout(ctx, result.Token)
+			writeAuthorizationCheckFailed(w)
+			return
+		}
+		permissions, err := provider.Permissions(ctx, result.User.ID)
+		if err != nil {
+			_ = service.Logout(ctx, result.Token)
+			writeAuthorizationCheckFailed(w)
+			return
+		}
 		csrfToken, err := newCSRFCookie(w, secureCookies)
 		if err != nil {
 			_ = service.Logout(ctx, result.Token)
@@ -92,7 +105,7 @@ func login(service authService, secureCookies bool) http.HandlerFunc {
 			return
 		}
 		setSessionCookie(w, result.Token, secureCookies)
-		writeJSON(w, http.StatusOK, makeAuthResponse(result.User, csrfToken))
+		writeJSON(w, http.StatusOK, makeAuthResponse(result.User, csrfToken, permissions))
 	}
 }
 
@@ -103,7 +116,7 @@ func me(secureCookies bool) http.HandlerFunc {
 			writeJSON(w, http.StatusInternalServerError, errorResponse{Error: apiError{Code: "CSRF_GENERATION_FAILED", Message: "Could not initialize the session"}})
 			return
 		}
-		writeJSON(w, http.StatusOK, makeAuthResponse(currentUser(r), csrfToken))
+		writeJSON(w, http.StatusOK, makeAuthResponse(currentUser(r), csrfToken, currentPermissions(r)))
 	}
 }
 
@@ -163,8 +176,15 @@ func requireCSRF(next http.Handler) http.Handler {
 	})
 }
 
-func makeAuthResponse(user auth.User, csrfToken string) authResponse {
-	return authResponse{User: userResponse{ID: user.ID, Email: user.Email, DisplayName: user.DisplayName}, CSRFToken: csrfToken}
+func makeAuthResponse(user auth.User, csrfToken string, permissions authorization.Permissions) authResponse {
+	if permissions == nil {
+		permissions = make(authorization.Permissions, 0)
+	}
+	return authResponse{
+		User:        userResponse{ID: user.ID, Email: user.Email, DisplayName: user.DisplayName},
+		CSRFToken:   csrfToken,
+		Permissions: permissions,
+	}
 }
 
 func currentUser(r *http.Request) auth.User {

@@ -47,10 +47,18 @@ func Bootstrap(ctx context.Context, db *pgxpool.Pool, email, password string) (b
 	if err != nil {
 		return false, err
 	}
-	if _, err := tx.Exec(ctx, `
+	var userID int64
+	if err := tx.QueryRow(ctx, `
 		INSERT INTO users (email, password_hash, display_name, created_at, updated_at)
-		VALUES ($1, $2, 'Administrator', $3, $3)`, email, passwordHash, time.Now().UTC()); err != nil {
+		VALUES ($1, $2, 'Administrator', $3, $3)
+		RETURNING id`, email, passwordHash, time.Now().UTC()).Scan(&userID); err != nil {
 		return false, fmt.Errorf("create bootstrap administrator: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO user_roles (user_id, role_id)
+		SELECT $1, id FROM roles WHERE name = 'admin'
+		ON CONFLICT DO NOTHING`, userID); err != nil {
+		return false, fmt.Errorf("assign bootstrap administrator role: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return false, fmt.Errorf("commit bootstrap administrator: %w", err)

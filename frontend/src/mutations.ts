@@ -8,6 +8,7 @@ export class MutationRequestError extends Error {
   constructor(
     readonly code: string,
     message: string,
+    readonly status: number,
     readonly fieldErrors: Record<string, string> = {},
   ) {
     super(message)
@@ -65,12 +66,12 @@ async function sendMutation(
   })
   const body: unknown = await response.json()
   if (response.status === 401) handleUnauthorized()
-  if (!response.ok) throw readMutationError(body)
+  if (!response.ok) throw readMutationError(body, response.status)
   if (!isRecord(body) || !isRecord(body.record)) throw new Error('Invalid mutation response')
   return body.record
 }
 
-function readMutationError(body: unknown): MutationRequestError {
+function readMutationError(body: unknown, status: number): MutationRequestError {
   if (isRecord(body) && isRecord(body.error)) {
     const fieldErrors: Record<string, string> = {}
     if (isRecord(body.error.field_errors)) {
@@ -81,10 +82,11 @@ function readMutationError(body: unknown): MutationRequestError {
     return new MutationRequestError(
       typeof body.error.code === 'string' ? body.error.code : 'RECORD_MUTATION_FAILED',
       typeof body.error.message === 'string' ? body.error.message : 'Could not save the record',
+      status,
       fieldErrors,
     )
   }
-  return new MutationRequestError('RECORD_MUTATION_FAILED', 'Could not save the record')
+  return new MutationRequestError('RECORD_MUTATION_FAILED', 'Could not save the record', status)
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

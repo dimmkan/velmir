@@ -1,7 +1,9 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { authState } from './auth'
 import {
   buildRecordsQuery,
   defaultRecordsQuery,
+  fetchRecords,
   filterOperators,
   formatRecordValue,
   parseRecordsQuery,
@@ -92,5 +94,21 @@ describe('filter metadata', () => {
     expect(filterOperators('character varying(255)')).toEqual(['contains', 'eq', 'neq', 'is_null'])
     expect(filterOperators('numeric(20,4)')).toEqual(['eq', 'neq', 'lt', 'lte', 'gt', 'gte', 'is_null'])
     expect(filterOperators('json')).toEqual(['is_null'])
+  })
+})
+
+
+describe('records authorization errors', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('distinguishes 403 from authentication and network failures without a login redirect', async () => {
+    authState.status = 'authenticated'
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      error: { code: 'FORBIDDEN', message: 'Permission denied' },
+    }), { status: 403 })))
+
+    const request = fetchRecords('', 'private', 'secrets', defaultRecordsQuery())
+    await expect(request).rejects.toMatchObject({ code: 'FORBIDDEN', status: 403 })
+    expect(authState.status).toBe('authenticated')
   })
 })
