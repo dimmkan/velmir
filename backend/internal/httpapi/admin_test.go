@@ -72,7 +72,7 @@ func (s *fakeAdministrationService) ReplaceRolePermissions(context.Context, int6
 }
 
 func newAdminTestRouter(service administrationService, isAdmin bool) http.Handler {
-	router := NewRouter(nil, nil, nil, nil, nil, testAuthService{user: testUser()}, testPermissionProvider{permissions: adminTestPermissions(), isAdmin: isAdmin}, false, service)
+	router := NewRouter(nil, nil, nil, nil, nil, testAuthService{user: testUser()}, testPermissionProvider{permissions: adminTestPermissions(), isAdmin: isAdmin}, nil, false, service)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "test-session"})
 		if r.Method != http.MethodGet {
@@ -128,7 +128,7 @@ func TestAdminEndpoints(t *testing.T) {
 
 func TestAdminAPIRequiresSessionAdminRoleAndCSRF(t *testing.T) {
 	service := &fakeAdministrationService{}
-	router := NewRouter(nil, nil, nil, nil, nil, testAuthService{user: testUser()}, testPermissionProvider{permissions: adminTestPermissions(), isAdmin: true}, false, service)
+	router := NewRouter(nil, nil, nil, nil, nil, testAuthService{user: testUser()}, testPermissionProvider{permissions: adminTestPermissions(), isAdmin: true}, nil, false, service)
 
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/admin/users", nil))

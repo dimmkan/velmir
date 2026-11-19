@@ -10,6 +10,8 @@ export class MutationRequestError extends Error {
     message: string,
     readonly status: number,
     readonly fieldErrors: Record<string, string> = {},
+    readonly mutationCommitted = false,
+    readonly record: RecordRow | null = null,
   ) {
     super(message)
     this.name = 'MutationRequestError'
@@ -84,6 +86,8 @@ function readMutationError(body: unknown, status: number): MutationRequestError 
       typeof body.error.message === 'string' ? body.error.message : 'Could not save the record',
       status,
       fieldErrors,
+      body.error.mutation_committed === true,
+      isRecord(body.record) ? body.record : null,
     )
   }
   return new MutationRequestError('RECORD_MUTATION_FAILED', 'Could not save the record', status)

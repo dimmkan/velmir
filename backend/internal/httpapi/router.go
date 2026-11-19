@@ -5,12 +5,16 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
+	"math"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
+	"velmir/backend/internal/audit"
 	"velmir/backend/internal/authorization"
 	"velmir/backend/internal/introspection"
 	"velmir/backend/internal/records"
@@ -20,7 +24,10 @@ const readinessTimeout = 2 * time.Second
 const schemaTimeout = 10 * time.Second
 const recordsTimeout = 10 * time.Second
 const mutationTimeout = 10 * time.Second
+const historyTimeout = 10 * time.Second
 const maxMutationBodySize = 1024 * 1024
+const defaultHistoryLimit = 20
+const maxHistoryLimit = 100
 
 type databasePinger interface {
 	Ping(context.Context) error
@@ -36,7 +43,12 @@ type recordLister interface {
 
 type recordWriter interface {
 	Create(context.Context, string, introspection.Resource, records.RecordValues) (map[string]any, error)
-	Update(context.Context, string, introspection.Resource, string, records.RecordValues) (map[string]any, error)
+	Update(context.Context, string, introspection.Resource, string, records.RecordValues) (records.UpdateResult, error)
+}
+
+type recordAudit interface {
+	Record(context.Context, audit.Input) error
+	History(context.Context, string, string, json.RawMessage, int64, int) (audit.HistoryResult, error)
 }
 
 type readinessResponse struct {
@@ -50,16 +62,17 @@ type errorResponse struct {
 }
 
 type apiError struct {
-	Code        string            `json:"code"`
-	Message     string            `json:"message"`
-	FieldErrors map[string]string `json:"field_errors,omitempty"`
+	Code              string            `json:"code"`
+	Message           string            `json:"message"`
+	FieldErrors       map[string]string `json:"field_errors,omitempty"`
+	MutationCommitted bool              `json:"mutation_committed,omitempty"`
 }
 
 type mutationRequest struct {
 	Values records.RecordValues `json:"values"`
 }
 
-func NewRouter(adminDatabase, targetDatabase databasePinger, inspector schemaInspector, lister recordLister, writer recordWriter, authService authService, permissions permissionProvider, secureCookies bool, adminServices ...administrationService) http.Handler {
+func NewRouter(adminDatabase, targetDatabase databasePinger, inspector schemaInspector, lister recordLister, writer recordWriter, authService authService, permissions permissionProvider, auditStore recordAudit, secureCookies bool, adminServices ...administrationService) http.Handler {
 	var administration administrationService
 	if len(adminServices) > 0 {
 		administration = adminServices[0]
@@ -75,8 +88,9 @@ func NewRouter(adminDatabase, targetDatabase databasePinger, inspector schemaIns
 		r.With(requireCSRF).Post("/api/auth/logout", logout(authService, secureCookies))
 		r.With(requireAnyPermission(authorization.Read)).Get("/api/schema", schema(inspector, writer != nil))
 		r.With(requireResourcePermission(authorization.Read)).Get("/api/resources/{schema}/{resource}/records", listRecords(inspector, lister))
-		r.With(requireCSRF, requireResourcePermission(authorization.Create)).Post("/api/resources/{schema}/{resource}/records", createRecord(inspector, writer))
-		r.With(requireCSRF, requireResourcePermission(authorization.Update)).Patch("/api/resources/{schema}/{resource}/records/{key}", updateRecord(inspector, writer))
+		r.With(requireResourcePermission(authorization.Read)).Get("/api/resources/{schema}/{resource}/records/{key}/history", recordHistory(inspector, auditStore))
+		r.With(requireCSRF, requireResourcePermission(authorization.Create)).Post("/api/resources/{schema}/{resource}/records", createRecord(inspector, writer, auditStore))
+		r.With(requireCSRF, requireResourcePermission(authorization.Update)).Patch("/api/resources/{schema}/{resource}/records/{key}", updateRecord(inspector, writer, auditStore))
 		r.Route("/api/admin", func(admin chi.Router) {
 			admin.Use(requireAdmin(permissions))
 			admin.Use(withAdminService(administration))
@@ -229,7 +243,7 @@ func listRecords(inspector schemaInspector, lister recordLister) http.HandlerFun
 	}
 }
 
-func createRecord(inspector schemaInspector, writer recordWriter) http.HandlerFunc {
+func createRecord(inspector schemaInspector, writer recordWriter, auditStore recordAudit) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if inspector == nil {
 			writeTargetNotConfigured(w)
@@ -249,16 +263,21 @@ func createRecord(inspector schemaInspector, writer recordWriter) http.HandlerFu
 		if !ok {
 			return
 		}
-		record, err := writer.Create(ctx, chi.URLParam(r, "schema"), resource, values)
+		schemaName := chi.URLParam(r, "schema")
+		record, err := writer.Create(ctx, schemaName, resource, values)
 		if err != nil {
 			writeMutationError(w, err)
+			return
+		}
+		if err := recordMutationAudit(ctx, auditStore, currentUser(r).ID, audit.Create, schemaName, resource, nil, record); err != nil {
+			writeCommittedAuditError(w, r, audit.Create, schemaName, resource.Name, record, err)
 			return
 		}
 		writeJSON(w, http.StatusCreated, map[string]any{"record": record})
 	}
 }
 
-func updateRecord(inspector schemaInspector, writer recordWriter) http.HandlerFunc {
+func updateRecord(inspector schemaInspector, writer recordWriter, auditStore recordAudit) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if inspector == nil {
 			writeTargetNotConfigured(w)
@@ -283,13 +302,118 @@ func updateRecord(inspector schemaInspector, writer recordWriter) http.HandlerFu
 			writeJSON(w, http.StatusBadRequest, errorResponse{Error: apiError{Code: "INVALID_RECORD_KEY", Message: "Record key is not valid URL-encoded JSON"}})
 			return
 		}
-		record, err := writer.Update(ctx, chi.URLParam(r, "schema"), resource, key, values)
+		schemaName := chi.URLParam(r, "schema")
+		result, err := writer.Update(ctx, schemaName, resource, key, values)
 		if err != nil {
 			writeMutationError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"record": record})
+		if err := recordMutationAudit(ctx, auditStore, currentUser(r).ID, audit.Update, schemaName, resource, result.Before, result.After); err != nil {
+			writeCommittedAuditError(w, r, audit.Update, schemaName, resource.Name, result.After, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"record": result.After})
 	}
+}
+
+func recordMutationAudit(ctx context.Context, auditStore recordAudit, actorUserID int64, action audit.Action, schemaName string, resource introspection.Resource, before, after map[string]any) error {
+	if auditStore == nil {
+		return nil
+	}
+	key, err := audit.RecordKey(resource, after)
+	if err != nil {
+		return err
+	}
+	return auditStore.Record(ctx, audit.Input{
+		ActorUserID: actorUserID,
+		Action:      action,
+		Schema:      schemaName,
+		Resource:    resource.Name,
+		RecordKey:   key,
+		Before:      before,
+		After:       after,
+	})
+}
+
+func writeCommittedAuditError(w http.ResponseWriter, r *http.Request, action audit.Action, schemaName, resourceName string, record map[string]any, err error) {
+	log.Printf("audit write failed after committed target mutation: action=%s schema=%q resource=%q actor_user_id=%d error_type=%T", action, schemaName, resourceName, currentUser(r).ID, err)
+	writeJSON(w, http.StatusInternalServerError, map[string]any{
+		"error": apiError{
+			Code:              "AUDIT_WRITE_FAILED",
+			Message:           "The target record was saved, but its audit event could not be recorded",
+			MutationCommitted: true,
+		},
+		"record": record,
+	})
+}
+
+func recordHistory(inspector schemaInspector, auditStore recordAudit) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if inspector == nil {
+			writeTargetNotConfigured(w)
+			return
+		}
+		if auditStore == nil {
+			writeJSON(w, http.StatusServiceUnavailable, errorResponse{Error: apiError{Code: "AUDIT_UNAVAILABLE", Message: "Audit history is not available"}})
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), historyTimeout)
+		defer cancel()
+		resource, ok := mutationResource(ctx, w, r, inspector)
+		if !ok {
+			return
+		}
+		rawKey, err := url.PathUnescape(chi.URLParam(r, "key"))
+		if err != nil {
+			writeInvalidHistoryKey(w)
+			return
+		}
+		key, err := records.CanonicalRecordKey(resource, rawKey)
+		if err != nil {
+			writeInvalidHistoryKey(w)
+			return
+		}
+		page, limit, ok := historyPagination(w, r)
+		if !ok {
+			return
+		}
+		result, err := auditStore.History(ctx, chi.URLParam(r, "schema"), resource.Name, key, page, limit)
+		if err != nil {
+			log.Printf("audit history query failed: schema=%q resource=%q error_type=%T", chi.URLParam(r, "schema"), resource.Name, err)
+			writeJSON(w, http.StatusInternalServerError, errorResponse{Error: apiError{Code: "HISTORY_QUERY_FAILED", Message: "Could not read record history"}})
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+	}
+}
+
+func historyPagination(w http.ResponseWriter, r *http.Request) (int64, int, bool) {
+	page := int64(1)
+	limit := defaultHistoryLimit
+	var err error
+	if raw := r.URL.Query().Get("page"); raw != "" {
+		page, err = strconv.ParseInt(raw, 10, 64)
+		if err != nil || page <= 0 {
+			writeJSON(w, http.StatusBadRequest, errorResponse{Error: apiError{Code: "INVALID_PAGE", Message: "Page must be a positive integer"}})
+			return 0, 0, false
+		}
+	}
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		limit, err = strconv.Atoi(raw)
+		if err != nil || limit < 1 || limit > maxHistoryLimit {
+			writeJSON(w, http.StatusBadRequest, errorResponse{Error: apiError{Code: "INVALID_LIMIT", Message: "Limit must be between 1 and 100"}})
+			return 0, 0, false
+		}
+	}
+	if page > math.MaxInt64/int64(limit) {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: apiError{Code: "INVALID_PAGE", Message: "Page is too large"}})
+		return 0, 0, false
+	}
+	return page, limit, true
+}
+
+func writeInvalidHistoryKey(w http.ResponseWriter) {
+	writeJSON(w, http.StatusBadRequest, errorResponse{Error: apiError{Code: "INVALID_RECORD_KEY", Message: "Record key must be URL-encoded JSON containing exactly the primary key fields"}})
 }
 
 func decodeMutationRequest(w http.ResponseWriter, r *http.Request) (records.RecordValues, bool) {

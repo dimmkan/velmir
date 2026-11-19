@@ -54,6 +54,20 @@ describe('record mutations', () => {
       body: '{"values":{"name":"new"}}',
     }))
   })
+
+  it('does not retry a committed mutation when audit fails and preserves the returned record', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      error: { code: 'AUDIT_WRITE_FAILED', message: 'Audit failed', mutation_committed: true },
+      record: { id: '9', name: 'committed' },
+    }), { status: 500 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const request = createRecord('', 'public', 'items', { name: 'committed' }, 'test-csrf-token')
+    await expect(request).rejects.toMatchObject({
+      code: 'AUDIT_WRITE_FAILED', status: 500, mutationCommitted: true, record: { id: '9', name: 'committed' },
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
 })
 
 

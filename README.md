@@ -2,7 +2,7 @@
 
 [English version](README_EN.md)
 
-Velmir — панель администрирования PostgreSQL, управляемая метаданными. На текущем этапе реализованы introspection схемы, универсальные списки записей с пагинацией, сортировкой, поиском и типизированными фильтрами, автоматические формы создания и редактирования записей, аутентификация с серверными сессиями, RBAC и управление пользователями и ролями через UI. Удаление записей, relations UI и audit пока не реализованы.
+Velmir — панель администрирования PostgreSQL, управляемая метаданными. На текущем этапе реализованы introspection схемы, универсальные списки записей с пагинацией, сортировкой, поиском и типизированными фильтрами, автоматические формы создания и редактирования записей, история создания и редактирования через Velmir, аутентификация с серверными сессиями, RBAC и управление пользователями и ролями через UI. Удаление записей, relations UI, файлы и автоматизация пока не реализованы.
 
 ## Требования
 
@@ -80,7 +80,7 @@ go run ./cmd/users list
 
 ## Базы данных и безопасность записи
 
-- **Admin database** (`localhost:5432`, база `velmir_admin`) принадлежит Velmir. Goose-миграции выполняются только здесь и создают migration baseline, таблицы `users`, `sessions`, `roles`, `user_roles` и `role_permissions`.
+- **Admin database** (`localhost:5432`, база `velmir_admin`) принадлежит Velmir. Goose-миграции выполняются только здесь и создают migration baseline, таблицы `users`, `sessions`, `roles`, `user_roles`, `role_permissions` и `audit_events`.
 - **Демонстрационная target database** (`localhost:5433`, база `velmir_demo`) — отдельный экземпляр PostgreSQL. Docker создаёт демонстрационные таблицы, записи, представление, первичные и внешние ключи.
 - `TARGET_DATABASE_URL` — существующее подключение к target database только для чтения. Его пул всегда устанавливает `default_transaction_read_only=on`; он используется для introspection и чтения записей и никогда — для mutations.
 - `TARGET_WRITE_DATABASE_URL` — отдельное **необязательное** подключение, используемое только для INSERT и UPDATE. Пример указывает на локальную демонстрационную writer-роль. Оставьте переменную пустой или удалите её, чтобы отключить элементы управления mutations и получать `TARGET_READ_ONLY` от mutation endpoints.
@@ -105,6 +105,14 @@ Frontend строит все формы на основе `/api/schema`; фор�
 После сохранения текущий список записей обновляется. Формы предупреждают о несохранённых изменениях перед закрытием или уходом со страницы. При конкурентных обновлениях сейчас действует семантика **last write wins**; optimistic locking и обнаружение конфликтов не реализованы. Удаление намеренно недоступно.
 
 Тела mutation-запросов, кодирование ключей записей и коды ошибок описаны в `docs/api.md`.
+
+## История создания и редактирования
+
+Каждый успешный POST/PATCH через Velmir создаёт в admin database событие `audit_events` с UUID, серверным timestamp, фактическим actor, действием `create`/`update`, schema/resource, простым или составным record key и безопасными before/after JSONB. Для create сохраняется after, для update — before и after из фактического состояния target database. Пароли, tokens, secrets и connection strings исключаются. Bigint/numeric остаются строками, bytea — Base64, JSON/JSONB сохраняет точность на backend.
+
+Для строки с первичным ключом кнопка **История** открывает generic-панель с actor, временем через `Intl`, действием и изменёнными полями. Поддерживаются ru/en без перезагрузки, пагинация и мобильная раскладка. API `GET /api/resources/{schema}/{resource}/records/{key}/history` требует session и `read`; без session возвращается 401, без read — 403 без перенаправления на login. Истории внешних изменений вне Velmir и DELETE на этом этапе нет.
+
+Target mutation сначала commit в target database, затем audit пишется в admin database: межбазовой атомарности нет. Если audit не удался после commit, API возвращает `AUDIT_WRITE_FAILED` и `mutation_committed=true`, frontend сообщает, что изменение уже сохранено, и предлагает обновить данные. Автоматического retry POST/PATCH и компенсирующих DELETE/UPDATE нет. Подробная схема, контракт history и ограничения приведены в `docs/api.md`.
 
 ## Сброс демонстрационной target database
 
@@ -152,9 +160,14 @@ go test -tags=integration ./internal/records -run TestWriterDemoDatabase -v -tim
 $env:TEST_ADMIN_DATABASE_URL = "postgresql://velmir:velmir_local_only@localhost:5432/velmir_admin?sslmode=disable"
 go test -tags=integration ./internal/auth -v -timeout 30s
 go test -tags=integration ./internal/httpapi -v -timeout 60s
+
+# Полный прогон с уже заданными тремя локальными test URL.
+go test -tags=integration ./... -v -timeout 60s
 Remove-Item Env:TEST_ADMIN_DATABASE_URL
+Remove-Item Env:TEST_TARGET_DATABASE_URL
+Remove-Item Env:TEST_TARGET_WRITE_DATABASE_URL
 ```
 
-Integration-тест writer создаёт и обновляет демонстрационные записи и намеренно оставляет их в демонстрационной базе; записи не удаляются. Тест отказывается работать с нелокальным хостом или базой, отличной от `velmir_demo`.
+Integration-тесты writer и history создают и обновляют демонстрационные записи и намеренно оставляют их в демонстрационной базе; записи не удаляются. Тесты отказываются работать с нелокальным хостом или базой, отличной от `velmir_demo`.
 
-Integration-тесты auth и admin API требуют локальную базу `velmir_admin` с применёнными миграциями, отклоняют нелокальные хосты и другие имена баз и откатывают свои транзакции. Они никогда не подключаются к target database. Не запускайте их против реальной admin database.
+Integration-тесты auth, audit storage и admin/history API требуют локальную базу `velmir_admin` с применёнными миграциями, отклоняют нелокальные хосты и другие имена баз и откатывают admin-транзакции. Не запускайте их против реальной admin database. Target-схема тестами не изменяется.

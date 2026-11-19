@@ -135,6 +135,57 @@ func BuildUpdateQuery(schemaName string, resource introspection.Resource, rawKey
 	return query.String(), args, nil
 }
 
+func BuildSelectForUpdateQuery(schemaName string, resource introspection.Resource, rawKey string) (string, []any, error) {
+	if resource.Kind != "table" || len(resource.PrimaryKey) == 0 {
+		return "", nil, mutationError("RESOURCE_READ_ONLY", "Records without a primary key cannot be updated")
+	}
+	keyValues, err := parseRecordKey(resource, rawKey)
+	if err != nil {
+		return "", nil, err
+	}
+	conditions := make([]string, 0, len(resource.PrimaryKey))
+	args := make([]any, 0, len(resource.PrimaryKey))
+	for _, keyColumn := range resource.PrimaryKey {
+		column, _ := findColumn(resource, keyColumn)
+		value, err := parseMutationValue(column, keyValues[keyColumn])
+		if err != nil {
+			return "", nil, err
+		}
+		args = append(args, value)
+		conditions = append(conditions, quoteIdentifier(keyColumn)+" = "+mutationPlaceholder(column, len(args)))
+	}
+
+	var query strings.Builder
+	query.WriteString("SELECT ")
+	query.WriteString(returningColumns(resource))
+	query.WriteString(" FROM ")
+	query.WriteString(quoteIdentifier(schemaName))
+	query.WriteByte('.')
+	query.WriteString(quoteIdentifier(resource.Name))
+	query.WriteString(" WHERE ")
+	query.WriteString(strings.Join(conditions, " AND "))
+	query.WriteString(" FOR UPDATE")
+	return query.String(), args, nil
+}
+
+func CanonicalRecordKey(resource introspection.Resource, rawKey string) (json.RawMessage, error) {
+	keyValues, err := parseRecordKey(resource, rawKey)
+	if err != nil {
+		return nil, err
+	}
+	for _, name := range resource.PrimaryKey {
+		column, _ := findColumn(resource, name)
+		if _, err := parseMutationValue(column, keyValues[name]); err != nil {
+			return nil, err
+		}
+	}
+	encoded, err := json.Marshal(keyValues)
+	if err != nil {
+		return nil, fmt.Errorf("encode record key: %w", err)
+	}
+	return encoded, nil
+}
+
 func parseRecordKey(resource introspection.Resource, rawKey string) (RecordValues, error) {
 	var key RecordValues
 	if err := json.Unmarshal([]byte(rawKey), &key); err != nil || len(key) != len(resource.PrimaryKey) {

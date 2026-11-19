@@ -26,6 +26,7 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{
   saved: [record: RecordRow]
+  'audit-failed': [record: RecordRow | null]
   cancel: []
   'dirty-change': [dirty: boolean]
 }>()
@@ -105,7 +106,9 @@ async function save() {
     initial = cloneFormState(state.value)
     emit('saved', record)
   } catch (error) {
-    if (error instanceof MutationRequestError) {
+    if (error instanceof MutationRequestError && error.mutationCommitted) {
+      emit('audit-failed', error.record)
+    } else if (error instanceof MutationRequestError) {
       serverError.value = errorTranslationKey(error.code, error.status)
       serverErrorCode.value = error.code
       serverErrorStatus.value = error.status

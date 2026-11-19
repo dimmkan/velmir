@@ -2,7 +2,7 @@
 
 [Русская версия](README.md)
 
-Velmir is a metadata-driven PostgreSQL admin panel. The current stage provides schema introspection, universal record lists with pagination, sorting, search and typed filters, automatic forms for creating and editing records, server-side session authentication, RBAC and user/role management UI. Record deletion, relations UI and audit are not implemented.
+Velmir is a metadata-driven PostgreSQL admin panel. The current stage provides schema introspection, universal record lists with pagination, sorting, search and typed filters, automatic forms for creating and editing records, create/update history for changes made through Velmir, server-side session authentication, RBAC and user/role management UI. Record deletion, relations UI, files and automation are not implemented.
 
 ## Requirements
 
@@ -80,7 +80,7 @@ For a local viewer check, these two commands create the account and assign `view
 
 ## Databases and write safety
 
-- **Admin database** (`localhost:5432`, database `velmir_admin`) belongs to Velmir. Goose migrations run only here and create the migration baseline plus `users`, `sessions`, `roles`, `user_roles` and `role_permissions`.
+- **Admin database** (`localhost:5432`, database `velmir_admin`) belongs to Velmir. Goose migrations run only here and create the migration baseline plus `users`, `sessions`, `roles`, `user_roles`, `role_permissions` and `audit_events`.
 - **Demo target database** (`localhost:5433`, database `velmir_demo`) is a separate PostgreSQL instance. Docker initializes demonstration tables, records, a view, primary keys and foreign keys.
 - `TARGET_DATABASE_URL` is the existing read-only target connection. Its pool always sets `default_transaction_read_only=on`; it is used for introspection and record reads and is never reused for mutations.
 - `TARGET_WRITE_DATABASE_URL` is a separate **optional** connection used only for INSERT and UPDATE. The example points to the local demo writer role. Leave it empty or remove it to disable all mutation controls and make mutation endpoints return `TARGET_READ_ONLY`.
@@ -105,6 +105,14 @@ Updates require a primary key, including composite keys, and cannot change prima
 After saving, the current record list is refreshed. Forms warn about unsaved changes before closing or leaving the page. Concurrent updates currently have **last write wins** semantics; optimistic locking and conflict detection are not implemented. Deletion is intentionally unavailable.
 
 See `docs/api_en.md` for mutation request bodies, record-key encoding and error codes.
+
+## Create and update history
+
+Every successful POST/PATCH through Velmir creates an `audit_events` row in the admin database with a UUID, server timestamp, actual actor, `create`/`update` action, schema/resource, simple or composite record key and safe before/after JSONB. Create stores after; update stores before and after from the actual target state. Passwords, tokens, secrets and connection strings are omitted. Bigint/numeric remain strings, bytea uses Base64, and JSON/JSONB preserves precision on the backend.
+
+For a row with a primary key, **History** opens a generic panel with the actor, `Intl`-formatted time, action and changed fields. Russian and English switch without reload; pagination and mobile layouts are supported. `GET /api/resources/{schema}/{resource}/records/{key}/history` requires a session and `read`: no session returns 401, while no read grant returns 403 without a login redirect. Changes made outside Velmir and DELETE are not audited at this stage.
+
+The target mutation commits in the target database before audit is written to the admin database; there is no cross-database atomicity. If audit fails after commit, the API returns `AUDIT_WRITE_FAILED` with `mutation_committed=true`, and the frontend explains that the change is already saved and offers a data refresh. There is no automatic POST/PATCH retry or compensating DELETE/UPDATE. See `docs/api_en.md` for the full schema, history contract and limitations.
 
 ## Demo target reset
 
@@ -152,9 +160,14 @@ go test -tags=integration ./internal/records -run TestWriterDemoDatabase -v -tim
 $env:TEST_ADMIN_DATABASE_URL = "postgresql://velmir:velmir_local_only@localhost:5432/velmir_admin?sslmode=disable"
 go test -tags=integration ./internal/auth -v -timeout 30s
 go test -tags=integration ./internal/httpapi -v -timeout 60s
+
+# Full run with all three local test URLs already set.
+go test -tags=integration ./... -v -timeout 60s
 Remove-Item Env:TEST_ADMIN_DATABASE_URL
+Remove-Item Env:TEST_TARGET_DATABASE_URL
+Remove-Item Env:TEST_TARGET_WRITE_DATABASE_URL
 ```
 
-The writer integration test creates and updates demo records and intentionally leaves them in the demo database; it does not delete records. It refuses to run against a non-local host or a database other than `velmir_demo`.
+The writer and history integration tests create and update demo records and intentionally leave them in the demo database; records are not deleted. The tests refuse non-local hosts and databases other than `velmir_demo`.
 
-The auth and admin API integration tests require the migrated local `velmir_admin` database, refuse non-local hosts and other database names, and roll back their transactions. They never connect to a target database. Do not run them against a real admin database.
+The auth, audit storage and admin/history API integration tests require the migrated local `velmir_admin` database, reject non-local hosts and other database names, and roll back their admin transactions. Do not run them against a real admin database. Tests never alter the target schema.

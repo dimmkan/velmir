@@ -5,16 +5,27 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"velmir/backend/internal/introspection"
 )
 
-type Writer struct {
-	database databaseQuerier
+type mutationDatabase interface {
+	databaseQuerier
+	Begin(context.Context) (pgx.Tx, error)
 }
 
-func NewWriter(database databaseQuerier) *Writer {
+type Writer struct {
+	database mutationDatabase
+}
+
+type UpdateResult struct {
+	Before map[string]any
+	After  map[string]any
+}
+
+func NewWriter(database mutationDatabase) *Writer {
 	return &Writer{database: database}
 }
 
@@ -23,19 +34,40 @@ func (w *Writer) Create(ctx context.Context, schemaName string, resource introsp
 	if err != nil {
 		return nil, err
 	}
-	return w.execute(ctx, query, args, resource, false)
+	return executeMutation(ctx, w.database, query, args, resource, false)
 }
 
-func (w *Writer) Update(ctx context.Context, schemaName string, resource introspection.Resource, key string, values RecordValues) (map[string]any, error) {
+func (w *Writer) Update(ctx context.Context, schemaName string, resource introspection.Resource, key string, values RecordValues) (UpdateResult, error) {
 	query, args, err := BuildUpdateQuery(schemaName, resource, key, values)
 	if err != nil {
-		return nil, err
+		return UpdateResult{}, err
 	}
-	return w.execute(ctx, query, args, resource, true)
+	lockQuery, lockArgs, err := BuildSelectForUpdateQuery(schemaName, resource, key)
+	if err != nil {
+		return UpdateResult{}, err
+	}
+	tx, err := w.database.Begin(ctx)
+	if err != nil {
+		return UpdateResult{}, fmt.Errorf("begin record mutation: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	before, err := executeMutation(ctx, tx, lockQuery, lockArgs, resource, true)
+	if err != nil {
+		return UpdateResult{}, err
+	}
+	after, err := executeMutation(ctx, tx, query, args, resource, true)
+	if err != nil {
+		return UpdateResult{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return UpdateResult{}, fmt.Errorf("commit record mutation: %w", err)
+	}
+	return UpdateResult{Before: before, After: after}, nil
 }
 
-func (w *Writer) execute(ctx context.Context, query string, args []any, resource introspection.Resource, allowMissing bool) (map[string]any, error) {
-	rows, err := w.database.Query(ctx, query, args...)
+func executeMutation(ctx context.Context, database databaseQuerier, query string, args []any, resource introspection.Resource, allowMissing bool) (map[string]any, error) {
+	rows, err := database.Query(ctx, query, args...)
 	if err != nil {
 		return nil, classifyMutationError(err, resource)
 	}

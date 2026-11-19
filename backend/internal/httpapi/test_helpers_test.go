@@ -62,7 +62,7 @@ func newTestRouter(adminDatabase, targetDatabase databasePinger, inspector schem
 	if len(args) > 1 && args[1] != nil {
 		writer = args[1].(recordWriter)
 	}
-	router := NewRouter(adminDatabase, targetDatabase, inspector, lister, writer, testAuthService{user: testUser()}, testPermissionProvider{permissions: adminTestPermissions()}, false)
+	router := NewRouter(adminDatabase, targetDatabase, inspector, lister, writer, testAuthService{user: testUser()}, testPermissionProvider{permissions: adminTestPermissions()}, nil, false)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "test-session"})
 		if r.Method == http.MethodPost || r.Method == http.MethodPatch {

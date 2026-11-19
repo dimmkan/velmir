@@ -92,26 +92,26 @@ func TestWriterDemoDatabase(t *testing.T) {
 		t.Errorf("returned book = %#v", book)
 	}
 
-	book, err = writer.Update(ctx, "public", books, testKey(t, map[string]any{"id": bookID}), testValues(t, map[string]any{"title": suffix + "-updated", "published_on": nil}))
+	updatedBook, err := writer.Update(ctx, "public", books, testKey(t, map[string]any{"id": bookID}), testValues(t, map[string]any{"title": suffix + "-updated", "published_on": nil}))
 	if err != nil {
 		t.Fatalf("update book: %v", err)
 	}
-	if book["title"] != suffix+"-updated" || book["published_on"] != nil {
-		t.Errorf("updated book = %#v", book)
+	if updatedBook.After["title"] != suffix+"-updated" || updatedBook.After["published_on"] != nil || updatedBook.Before["title"] != suffix {
+		t.Errorf("updated book = %#v, before = %#v", updatedBook.After, updatedBook.Before)
 	}
 
 	links, _ := catalog.FindResource("public", "book_categories")
 	key := map[string]any{"book_id": bookID, "category_id": categoryID}
-	link, err := writer.Create(ctx, "public", links, testValues(t, map[string]any{"book_id": bookID, "category_id": categoryID, "note": "before"}))
+	_, err = writer.Create(ctx, "public", links, testValues(t, map[string]any{"book_id": bookID, "category_id": categoryID, "note": "before"}))
 	if err != nil {
 		t.Fatalf("create composite-key record: %v", err)
 	}
-	link, err = writer.Update(ctx, "public", links, testKey(t, key), testValues(t, map[string]any{"note": "after"}))
+	updatedLink, err := writer.Update(ctx, "public", links, testKey(t, key), testValues(t, map[string]any{"note": "after"}))
 	if err != nil {
 		t.Fatalf("update composite-key record: %v", err)
 	}
-	if link["note"] != "after" || link["book_id"] != bookID || link["category_id"] != categoryID {
-		t.Errorf("updated composite-key record = %#v", link)
+	if updatedLink.After["note"] != "after" || updatedLink.After["book_id"] != bookID || updatedLink.After["category_id"] != categoryID || updatedLink.Before["note"] != "before" {
+		t.Errorf("updated composite-key record = %#v, before = %#v", updatedLink.After, updatedLink.Before)
 	}
 }
 

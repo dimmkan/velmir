@@ -42,6 +42,7 @@ function mockRecords() {
 const RecordsHost = defineComponent({
   components: { RecordsTable, AppFooter },
   props: {
+    readAllowed: { type: Boolean, default: true },
     createAllowed: { type: Boolean, default: true },
     updateAllowed: { type: Boolean, default: true },
   },
@@ -53,6 +54,7 @@ const RecordsHost = defineComponent({
         schema-name="public"
         :resource="resource"
         :write-enabled="true"
+        :read-allowed="readAllowed"
         :create-allowed="createAllowed"
         :update-allowed="updateAllowed"
       />
@@ -112,7 +114,7 @@ describe('localized records and permissions', () => {
     vi.stubGlobal('fetch', mockRecords())
     const instance = createVelmirI18n()
     const wrapper = mount(RecordsHost, {
-      props: { createAllowed: false, updateAllowed: false },
+      props: { readAllowed: false, createAllowed: false, updateAllowed: false },
       global: { plugins: [instance] },
     })
     await flushPromises()

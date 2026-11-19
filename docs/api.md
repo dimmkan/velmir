@@ -324,9 +324,79 @@ HTTP 200:
 - HTTP 404: `RESOURCE_NOT_FOUND` или `RECORD_NOT_FOUND`.
 - HTTP 409: `RESOURCE_READ_ONLY` или `UNIQUE_VIOLATION`.
 - HTTP 503: `TARGET_NOT_CONFIGURED`.
-- HTTP 500: `SCHEMA_INTROSPECTION_FAILED` или `RECORD_MUTATION_FAILED`.
+- HTTP 500: `SCHEMA_INTROSPECTION_FAILED`, `RECORD_MUTATION_FAILED` или `AUDIT_WRITE_FAILED` с `mutation_committed=true`, если target mutation уже committed, но audit не записан.
 
 Ответы об ошибках ограничений используют общие сообщения и не раскрывают SQL, stack traces или внутренние сведения сервера. Размер mutation-запросов ограничен 1 МиБ, backend timeout составляет 10 секунд. DELETE endpoints не реализованы.
+
+После успешного POST или PATCH backend записывает событие `create` или `update` в `audit_events` **в admin database**. Actor определяется по серверной сессии, timestamp и UUID генерируются сервером. Для create сохраняется фактический `after` из PostgreSQL `RETURNING`; для update сохраняются фактические `before` и `after`. Перед UPDATE запись блокируется и читается в той же target-транзакции, поэтому `before` не принимается от клиента. Поддерживаются простые и составные первичные ключи.
+
+Target mutation и audit находятся в разных базах и **не образуют атомарную транзакцию**. Сначала завершается target mutation, затем создаётся audit event. Ошибка target mutation не создаёт событие. Если target уже committed, но запись audit не удалась, возвращается HTTP 500 с отдельной ошибкой и сохранённой записью:
+
+```json
+{
+  "error": {
+    "code": "AUDIT_WRITE_FAILED",
+    "message": "The target record was saved, but its audit event could not be recorded",
+    "mutation_committed": true
+  },
+  "record": {"id": "42", "title": "Saved in target"}
+}
+```
+
+`mutation_committed=true` означает, что target-запись уже сохранена и **не была откачена**. Backend не выполняет компенсирующие DELETE/UPDATE, двухфазный commit или автоматический повтор POST/PATCH. Клиент не должен автоматически повторять mutation, особенно POST; следует обновить данные записи и проверить состояние. Frontend показывает отдельное предупреждение и предлагает ручное обновление списка.
+
+## История изменений через Velmir
+
+Таблица `audit_events` существует только в admin database и содержит:
+
+- `id UUID PRIMARY KEY` — уникальный ID, по умолчанию `gen_random_uuid()`;
+- `occurred_at TIMESTAMPTZ` — серверное время, по умолчанию `clock_timestamp()`;
+- `actor_user_id BIGINT` — ссылка на `users(id)` фактического аутентифицированного actor;
+- `action TEXT` — только `create` или `update`;
+- `schema_name`, `resource_name` — технические идентификаторы ресурса;
+- `record_key JSONB` — объект с простым или составным первичным ключом;
+- `before_data JSONB` — `NULL` для create и фактическое состояние для update;
+- `after_data JSONB` — фактическое состояние, возвращённое target database.
+
+Check constraint требует after для create и before/after для update. Индексы ограничивают запрос конкретным ресурсом и ключом; endpoint для неограниченного чтения всей таблицы отсутствует. Миграции Goose транзакционны и используют идемпотентные DDL-операции. Velmir не создаёт audit-таблицы, triggers или functions в target database.
+
+Поля, по имени содержащие пароли, session/CSRF tokens, password hashes, secrets или connection strings, исключаются из audit, включая вложенные JSON-объекты. Ошибки логируются только с типом ошибки и без connection strings, значений записей и секретов. Bigint/numeric используют строки records API, bytea — Base64, а JSON/JSONB обрабатывается как `json.RawMessage`/`json.Number` без преобразования через JavaScript number.
+
+История охватывает только успешные изменения, выполненные через Velmir после внедрения этой функции. Она **не гарантирует фиксацию внешних изменений**, сделанных напрямую в target database. На этом этапе DELETE, login/logout, чтение и администрирование пользователей не записываются в audit. Для таблицы без первичного ключа create может сохранить событие с пустым ключом, но history конкретной записи недоступна.
+
+## GET /api/resources/{schema}/{resource}/records/{key}/history
+
+Возвращает историю конкретной записи в обратном хронологическом порядке (`occurred_at DESC`, затем `id DESC`). Требуются session и право `read` на ресурс: без session возвращается 401 `UNAUTHENTICATED`, без read — 403 `FORBIDDEN` до introspection и чтения audit. Недоступные ресурсы и их история не раскрываются. CSRF для GET не требуется.
+
+`{key}` использует тот же URL-кодированный JSON-объект, что и PATCH, включая составные ключи. Schema, resource и ключевые столбцы проверяются по свежим metadata allowlist. Параметры запроса:
+
+- `page` — положительное целое, по умолчанию `1`; переполнение offset отклоняется;
+- `limit` — от `1` до `100`, по умолчанию `20`.
+
+Ответ содержит не более `limit` событий и `has_next`, вычисленное через запрос `limit + 1`; общее число событий и неограниченная выгрузка не предоставляются. Отсутствие истории — HTTP 200 с пустым массивом:
+
+```json
+{
+  "events": [
+    {
+      "id": "00112233-4455-6677-8899-aabbccddeeff",
+      "actor": {"id": 1, "email": "admin@example.com", "display_name": "Administrator"},
+      "timestamp": "2025-01-02T03:04:05.123456Z",
+      "action": "update",
+      "schema": "public",
+      "resource": "items",
+      "record_key": {"tenant_id": "7", "id": "42"},
+      "before": {"title": "Before", "price": "1.00"},
+      "after": {"title": "After", "price": "12345678901234567890.01"}
+    }
+  ],
+  "page": 1,
+  "limit": 20,
+  "has_next": false
+}
+```
+
+`before` равен `null` для create. Record key и before/after используют то же безопасное JSON representation, что и records API: точные bigint/numeric строки, JSON/JSONB без number-конвертации на backend, Base64 bytea, строки дат/timestamps/UUID. Ошибки: 400 `INVALID_RECORD_KEY`, `INVALID_PAGE`, `INVALID_LIMIT`; 401/403 как указано выше; 404 `RESOURCE_NOT_FOUND`; 500 `SCHEMA_INTROSPECTION_FAILED`, `HISTORY_QUERY_FAILED`; 503 `TARGET_NOT_CONFIGURED` или `AUDIT_UNAVAILABLE`.
 
 ## GET /readyz
 

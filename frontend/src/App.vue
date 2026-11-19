@@ -51,6 +51,8 @@ const selectedSchemaName = computed(() => {
   return ''
 })
 
+const readAllowed = computed(() => Boolean(selectedResource.value) &&
+  can(selectedSchemaName.value, selectedResource.value!.name, 'read'))
 const createAllowed = computed(() => Boolean(selectedResource.value) &&
   can(selectedSchemaName.value, selectedResource.value!.name, 'create'))
 const updateAllowed = computed(() => Boolean(selectedResource.value) &&
@@ -333,6 +335,7 @@ onBeforeUnmount(() => window.removeEventListener('popstate', handlePopState))
             :schema-name="selectedSchemaName"
             :resource="selectedResource"
             :write-enabled="catalog?.write_enabled ?? false"
+            :read-allowed="readAllowed"
             :create-allowed="createAllowed"
             :update-allowed="updateAllowed"
             @dirty-change="formDirty = $event"

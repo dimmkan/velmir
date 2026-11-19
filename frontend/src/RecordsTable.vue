@@ -19,7 +19,9 @@ import {
 } from './records'
 import type { ResourceMetadata } from './schema'
 import RecordForm from './RecordForm.vue'
+import RecordHistory from './RecordHistory.vue'
 import { canCreateRecord, canUpdateRecord, type FormMode } from './recordForm'
+import { buildRecordKey } from './mutations'
 import type { RecordRow } from './records'
 
 const props = defineProps<{
@@ -27,6 +29,7 @@ const props = defineProps<{
   schemaName: string
   resource: ResourceMetadata
   writeEnabled: boolean
+  readAllowed: boolean
   createAllowed: boolean
   updateAllowed: boolean
 }>()
@@ -48,6 +51,8 @@ const filterBoolean = ref('true')
 const filterNull = ref('true')
 const formMode = ref<FormMode | null>(null)
 const activeRecord = ref<RecordRow | undefined>()
+const historyKey = ref('')
+const auditWarning = ref(false)
 
 let controller: AbortController | null = null
 let requestID = 0
@@ -65,16 +70,25 @@ const canAddFilter = computed(() =>
 )
 const canCreate = computed(() => canCreateRecord(props.writeEnabled, props.resource, props.createAllowed))
 const canUpdate = computed(() => canUpdateRecord(props.writeEnabled, props.resource, props.updateAllowed))
+const canViewHistory = computed(() => props.readAllowed && props.resource.primary_key.length > 0)
 const hasMutationPermission = computed(() => props.createAllowed || props.updateAllowed)
 
 function openCreateForm() {
+  historyKey.value = ''
   activeRecord.value = undefined
   formMode.value = 'create'
 }
 
 function openEditForm(record: RecordRow) {
+  historyKey.value = ''
   activeRecord.value = record
   formMode.value = 'edit'
+}
+
+function openHistory(record: RecordRow) {
+  closeForm()
+  auditWarning.value = false
+  historyKey.value = buildRecordKey(props.resource, record)
 }
 
 function closeForm() {
@@ -83,12 +97,21 @@ function closeForm() {
 }
 
 function recordSaved() {
+  auditWarning.value = false
   closeForm()
+  void loadRecords()
+}
+
+function recordAuditFailed() {
+  closeForm()
+  auditWarning.value = true
   void loadRecords()
 }
 
 function syncFromURL() {
   closeForm()
+  historyKey.value = ''
+  auditWarning.value = false
   state.value = parseRecordsQuery(window.location.search, props.resource)
   searchInput.value = state.value.search
   searchColumn.value = state.value.searchColumns.length === 1 ? state.value.searchColumns[0] : ''
@@ -233,8 +256,24 @@ onBeforeUnmount(() => {
       :mode="formMode"
       :record="activeRecord"
       @saved="recordSaved"
+      @audit-failed="recordAuditFailed"
       @cancel="closeForm"
       @dirty-change="emit('dirty-change', $event)"
+    />
+
+    <div v-if="auditWarning" class="audit-warning" role="alert">
+      <strong>{{ t('history.auditFailedTitle') }}</strong>
+      <p>{{ t('history.auditFailed') }}</p>
+      <button type="button" class="secondary-button" :disabled="loading" @click="loadRecords">{{ t('history.refreshRecords') }}</button>
+    </div>
+
+    <RecordHistory
+      v-if="historyKey"
+      :backend-base-u-r-l="backendBaseURL"
+      :schema-name="schemaName"
+      :resource="resource"
+      :record-key="historyKey"
+      @close="historyKey = ''"
     />
 
     <form class="records-toolbar" @submit.prevent="applySearch">
@@ -319,7 +358,7 @@ onBeforeUnmount(() => {
               <span v-else>{{ column.name }}</span>
               <small>{{ column.data_type }}</small>
             </th>
-            <th v-if="canUpdate">{{ t('records.actions') }}</th>
+            <th v-if="canUpdate || canViewHistory">{{ t('records.actions') }}</th>
           </tr>
         </thead>
         <tbody>
@@ -329,8 +368,11 @@ onBeforeUnmount(() => {
               :key="column.name"
               :class="{ 'null-value': record[column.name] === null, 'json-value': typeof record[column.name] === 'object' && record[column.name] !== null }"
             >{{ formatRecordValue(record[column.name], column.data_type, locale) }}</td>
-            <td v-if="canUpdate" class="record-action-cell">
-              <button type="button" class="secondary-button" @click="openEditForm(record)">{{ t('common.edit') }}</button>
+            <td v-if="canUpdate || canViewHistory" class="record-action-cell">
+              <div class="record-row-actions">
+                <button v-if="canUpdate" type="button" class="secondary-button" @click="openEditForm(record)">{{ t('common.edit') }}</button>
+                <button v-if="canViewHistory" type="button" class="secondary-button" @click="openHistory(record)">{{ t('history.open') }}</button>
+              </div>
             </td>
           </tr>
         </tbody>

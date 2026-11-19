@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"velmir/backend/internal/audit"
 	"velmir/backend/internal/auth"
 	"velmir/backend/internal/authorization"
 	"velmir/backend/internal/config"
@@ -65,9 +66,10 @@ func run() error {
 	}
 	permissionStore := authorization.NewStore(adminDatabase)
 	administration := auth.NewAdministration(adminDatabase)
-	router := httpapi.NewRouter(adminDatabase, nil, nil, nil, writer, authService, permissionStore, cfg.SessionCookieSecure, administration)
+	auditStore := audit.NewStore(adminDatabase)
+	router := httpapi.NewRouter(adminDatabase, nil, nil, nil, writer, authService, permissionStore, auditStore, cfg.SessionCookieSecure, administration)
 	if targetDatabase != nil {
-		router = httpapi.NewRouter(adminDatabase, targetDatabase, introspection.New(targetDatabase), records.New(targetDatabase), writer, authService, permissionStore, cfg.SessionCookieSecure, administration)
+		router = httpapi.NewRouter(adminDatabase, targetDatabase, introspection.New(targetDatabase), records.New(targetDatabase), writer, authService, permissionStore, auditStore, cfg.SessionCookieSecure, administration)
 	}
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,

@@ -43,19 +43,20 @@ func TestServicePaginationSortingAndFilters(t *testing.T) {
 	}
 	service := New(database)
 
+	fixedFilter := `[{"column":"title","operator":"contains","value":"PostgreSQL"}]`
 	firstPage := listForTest(t, ctx, service, books, url.Values{
-		"page": {"1"}, "limit": {"2"}, "sort": {"id"}, "direction": {"asc"},
+		"page": {"1"}, "limit": {"1"}, "sort": {"id"}, "direction": {"asc"}, "filter": {fixedFilter},
 	})
 	secondPage := listForTest(t, ctx, service, books, url.Values{
-		"page": {"2"}, "limit": {"2"}, "sort": {"id"}, "direction": {"asc"},
+		"page": {"2"}, "limit": {"1"}, "sort": {"id"}, "direction": {"asc"}, "filter": {fixedFilter},
 	})
-	if len(firstPage.Records) != 2 || !firstPage.HasNext {
-		t.Fatalf("first page = %+v, want two records and has_next", firstPage)
+	if len(firstPage.Records) != 1 || !firstPage.HasNext {
+		t.Fatalf("first page = %+v, want one record and has_next", firstPage)
 	}
-	if len(secondPage.Records) != 2 || secondPage.HasNext {
-		t.Fatalf("second page = %+v, want two records and no next page", secondPage)
+	if len(secondPage.Records) != 1 || secondPage.HasNext {
+		t.Fatalf("second page = %+v, want one record and no next page", secondPage)
 	}
-	ids := make([]int64, 0, 4)
+	ids := make([]int64, 0, 2)
 	for _, page := range []ListResult{firstPage, secondPage} {
 		for _, record := range page.Records {
 			id, ok := record["id"].(string)
@@ -80,7 +81,7 @@ func TestServicePaginationSortingAndFilters(t *testing.T) {
 	}
 
 	descending := listForTest(t, ctx, service, books, url.Values{
-		"limit": {"4"}, "sort": {"title"}, "direction": {"desc"},
+		"limit": {"2"}, "sort": {"title"}, "direction": {"desc"}, "filter": {fixedFilter},
 	})
 	for index := 1; index < len(descending.Records); index++ {
 		if descending.Records[index-1]["title"].(string) < descending.Records[index]["title"].(string) {
@@ -114,7 +115,7 @@ func TestServicePaginationSortingAndFilters(t *testing.T) {
 	}
 
 	nullOnly := listForTest(t, ctx, service, books, url.Values{
-		"filter": {`[{"column":"published_on","operator":"is_null","value":true}]`},
+		"filter": {`[{"column":"title","operator":"eq","value":"Advanced Queries"},{"column":"published_on","operator":"is_null","value":true}]`},
 	})
 	if len(nullOnly.Records) != 1 || nullOnly.Records[0]["published_on"] != nil {
 		t.Errorf("null filter result = %+v", nullOnly)

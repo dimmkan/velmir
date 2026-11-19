@@ -48,7 +48,7 @@ func TestLocalAdminDatabaseAdministrationAPI(t *testing.T) {
 	}
 	provider := authorization.NewStore(tx)
 	administration := auth.NewAdministration(tx)
-	router := NewRouter(nil, nil, nil, nil, nil, authService, provider, false, administration)
+	router := NewRouter(nil, nil, nil, nil, nil, authService, provider, nil, false, administration)
 
 	actorPassword := "integration-actor-password"
 	actor, err := auth.CreateUser(ctx, tx, "admin-api-actor@example.test", "Actor", actorPassword)

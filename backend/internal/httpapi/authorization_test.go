@@ -15,7 +15,7 @@ import (
 )
 
 func newRBACTestRouter(permissions authorization.Permissions, inspector schemaInspector, lister recordLister, writer recordWriter) http.Handler {
-	router := NewRouter(nil, nil, inspector, lister, writer, testAuthService{user: testUser()}, testPermissionProvider{permissions: permissions}, false)
+	router := NewRouter(nil, nil, inspector, lister, writer, testAuthService{user: testUser()}, testPermissionProvider{permissions: permissions}, nil, false)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "test-session"})
 		if r.Method == http.MethodPost || r.Method == http.MethodPatch {
@@ -68,9 +68,9 @@ func TestViewerCanReadButCannotMutateWithValidCSRF(t *testing.T) {
 			mutationCalled = true
 			return nil, nil
 		},
-		update: func(context.Context, string, introspection.Resource, string, records.RecordValues) (map[string]any, error) {
+		update: func(context.Context, string, introspection.Resource, string, records.RecordValues) (records.UpdateResult, error) {
 			mutationCalled = true
-			return nil, nil
+			return records.UpdateResult{}, nil
 		},
 	}
 	lister := recordListerFunc(func(context.Context, string, introspection.Resource, records.ListOptions) (records.ListResult, error) {
@@ -114,8 +114,8 @@ func TestAdminCanReadCreateAndUpdate(t *testing.T) {
 		create: func(context.Context, string, introspection.Resource, records.RecordValues) (map[string]any, error) {
 			return map[string]any{"id": "1"}, nil
 		},
-		update: func(context.Context, string, introspection.Resource, string, records.RecordValues) (map[string]any, error) {
-			return map[string]any{"id": "1"}, nil
+		update: func(context.Context, string, introspection.Resource, string, records.RecordValues) (records.UpdateResult, error) {
+			return records.UpdateResult{After: map[string]any{"id": "1"}}, nil
 		},
 	}
 	lister := recordListerFunc(func(context.Context, string, introspection.Resource, records.ListOptions) (records.ListResult, error) {
@@ -194,7 +194,7 @@ func TestMeReturnsEffectivePermissions(t *testing.T) {
 }
 
 func TestAuthorizationFailureAndMissingDeleteEndpoint(t *testing.T) {
-	router := NewRouter(nil, nil, recordsInspector(), nil, nil, testAuthService{user: testUser()}, testPermissionProvider{err: errors.New("database details")}, false)
+	router := NewRouter(nil, nil, recordsInspector(), nil, nil, testAuthService{user: testUser()}, testPermissionProvider{err: errors.New("database details")}, nil, false)
 	request := httptest.NewRequest(http.MethodGet, "/api/schema", nil)
 	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "test-session"})
 	response := httptest.NewRecorder()

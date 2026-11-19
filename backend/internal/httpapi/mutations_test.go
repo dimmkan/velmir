@@ -15,14 +15,14 @@ import (
 
 type recordWriterFunc struct {
 	create func(context.Context, string, introspection.Resource, records.RecordValues) (map[string]any, error)
-	update func(context.Context, string, introspection.Resource, string, records.RecordValues) (map[string]any, error)
+	update func(context.Context, string, introspection.Resource, string, records.RecordValues) (records.UpdateResult, error)
 }
 
 func (fn recordWriterFunc) Create(ctx context.Context, schema string, resource introspection.Resource, values records.RecordValues) (map[string]any, error) {
 	return fn.create(ctx, schema, resource, values)
 }
 
-func (fn recordWriterFunc) Update(ctx context.Context, schema string, resource introspection.Resource, key string, values records.RecordValues) (map[string]any, error) {
+func (fn recordWriterFunc) Update(ctx context.Context, schema string, resource introspection.Resource, key string, values records.RecordValues) (records.UpdateResult, error) {
 	return fn.update(ctx, schema, resource, key, values)
 }
 
@@ -55,12 +55,12 @@ func TestCreateAndUpdateRecords(t *testing.T) {
 			}
 			return map[string]any{"id": "9223372036854775807", "name": "new"}, nil
 		},
-		update: func(_ context.Context, _ string, _ introspection.Resource, key string, values records.RecordValues) (map[string]any, error) {
+		update: func(_ context.Context, _ string, _ introspection.Resource, key string, values records.RecordValues) (records.UpdateResult, error) {
 			gotKey = key
 			if string(values["name"]) != `"updated"` {
 				t.Errorf("values = %#v", values)
 			}
-			return map[string]any{"id": "1", "name": "updated"}, nil
+			return records.UpdateResult{Before: map[string]any{"id": "1", "name": "before"}, After: map[string]any{"id": "1", "name": "updated"}}, nil
 		},
 	}
 	router := newTestRouterWithWriter(nil, nil, recordsInspector(), nil, writer)
