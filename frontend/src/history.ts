@@ -5,7 +5,7 @@ import type { ColumnMetadata, ResourceMetadata } from './schema'
 export const DEFAULT_HISTORY_LIMIT = 20
 export const MAX_HISTORY_LIMIT = 100
 
-export type HistoryAction = 'create' | 'update'
+export type HistoryAction = 'create' | 'update' | 'delete'
 
 export interface HistoryActor {
   id: number
@@ -52,6 +52,8 @@ export function historyChanges(event: HistoryEvent, resource: ResourceMetadata):
     const hasAfter = event.after !== null && Object.hasOwn(event.after, column.name)
     if (event.action === 'create' && hasAfter) {
       changes.push({ column, before: undefined, after: event.after![column.name] })
+    } else if (event.action === 'delete' && hasBefore) {
+      changes.push({ column, before: event.before![column.name], after: undefined })
     } else if (event.action === 'update' && (hasBefore || hasAfter) && !valuesEqual(event.before?.[column.name], event.after?.[column.name])) {
       changes.push({ column, before: event.before?.[column.name], after: event.after?.[column.name] })
     }
@@ -112,7 +114,7 @@ function isHistoryEvent(value: unknown): value is HistoryEvent {
     typeof value.actor.id === 'number' && Number.isSafeInteger(value.actor.id) &&
     typeof value.actor.email === 'string' && typeof value.actor.display_name === 'string' &&
     typeof value.timestamp === 'string' &&
-    (value.action === 'create' || value.action === 'update') &&
+    (value.action === 'create' || value.action === 'update' || value.action === 'delete') &&
     typeof value.schema === 'string' && typeof value.resource === 'string' &&
     (value.before === null || isRecord(value.before)) &&
     (value.after === null || isRecord(value.after))

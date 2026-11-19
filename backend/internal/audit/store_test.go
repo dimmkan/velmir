@@ -23,6 +23,21 @@ func TestRecordKeySupportsCompositePrimaryKeys(t *testing.T) {
 	}
 }
 
+func TestDeleteAuditRequiresOnlyBeforeData(t *testing.T) {
+	store := NewStore(nil)
+	base := Input{ActorUserID: 1, Action: Delete, Schema: "public", Resource: "items", RecordKey: json.RawMessage(`{"id":"1"}`), Before: map[string]any{"id": "1"}}
+	withAfter := base
+	withAfter.After = map[string]any{"id": "1"}
+	if err := store.Record(t.Context(), withAfter); err == nil || err.Error() != "delete audit event must contain only before data" {
+		t.Fatalf("delete with after error = %v", err)
+	}
+	withoutBefore := base
+	withoutBefore.Before = nil
+	if err := store.Record(t.Context(), withoutBefore); err == nil || err.Error() != "delete audit event must contain only before data" {
+		t.Fatalf("delete without before error = %v", err)
+	}
+}
+
 func TestMarshalRecordOmitsSecretsAndPreservesExactValues(t *testing.T) {
 	value, err := marshalRecord(map[string]any{
 		"id":                "9223372036854775807",

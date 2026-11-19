@@ -113,6 +113,27 @@ func TestWriterDemoDatabase(t *testing.T) {
 	if updatedLink.After["note"] != "after" || updatedLink.After["book_id"] != bookID || updatedLink.After["category_id"] != categoryID || updatedLink.Before["note"] != "before" {
 		t.Errorf("updated composite-key record = %#v, before = %#v", updatedLink.After, updatedLink.Before)
 	}
+
+	_, err = writer.Delete(ctx, "public", authors, testKey(t, map[string]any{"id": authorID}))
+	var mutationErr *MutationError
+	if !errors.As(err, &mutationErr) || mutationErr.Code != "FOREIGN_KEY_VIOLATION" {
+		t.Fatalf("referenced author delete error = %#v, want FOREIGN_KEY_VIOLATION", err)
+	}
+	deletedLink, err := writer.Delete(ctx, "public", links, testKey(t, key))
+	if err != nil || deletedLink["note"] != "after" || deletedLink["book_id"] != bookID || deletedLink["category_id"] != categoryID {
+		t.Fatalf("delete composite-key record = %#v, %v", deletedLink, err)
+	}
+	_, err = writer.Delete(ctx, "public", links, testKey(t, key))
+	if !errors.As(err, &mutationErr) || mutationErr.Code != "RECORD_NOT_FOUND" {
+		t.Fatalf("missing composite-key delete error = %#v", err)
+	}
+	deletedBook, err := writer.Delete(ctx, "public", books, testKey(t, map[string]any{"id": bookID}))
+	if err != nil || deletedBook["title"] != suffix+"-updated" {
+		t.Fatalf("delete simple-key record = %#v, %v", deletedBook, err)
+	}
+	if _, err := writer.Delete(ctx, "public", categories, testKey(t, map[string]any{"id": categoryID})); err != nil {
+		t.Fatalf("delete category: %v", err)
+	}
 }
 
 func assertLocalDemoURL(t *testing.T, raw string) {

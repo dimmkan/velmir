@@ -15,9 +15,9 @@
 }
 ```
 
-Доступ по умолчанию запрещён и проверяется на backend независимо от frontend. Пользователю можно назначить несколько ролей; их права объединяются. Системная роль `admin` даёт `read`, `create` и `update` для всех ресурсов, а `viewer` — только `read`. Resource-level grant задаётся схемой, ресурсом и операцией; `*` в системных ролях означает все схемы и ресурсы. Неизвестные роли и отсутствие ролей не дают дополнительных прав.
+Доступ по умолчанию запрещён и проверяется на backend независимо от frontend. Пользователю можно назначить несколько ролей; их права объединяются. Системная роль `admin` даёт `read`, `create`, `update` и `delete` для всех ресурсов, а `viewer` — только `read`. Resource-level grant задаётся схемой, ресурсом и операцией; `*` в системных ролях означает все схемы и ресурсы. Неизвестные роли и отсутствие ролей не дают дополнительных прав. Право `delete` не следует из `read`, `create`, `update` или `write_enabled` и проверяется отдельно.
 
-Аутентифицированный пользователь без необходимого права получает HTTP 403 с кодом `FORBIDDEN`; это отличается от HTTP 401 при отсутствии сессии и от `CSRF_TOKEN_INVALID`. `GET /api/auth/me` остаётся доступным и возвращает пустой список permissions пользователю без роли. Публичная регистрация и DELETE target-записей недоступны. Управление пользователями и ролями разрешено только системной роли `admin`.
+Аутентифицированный пользователь без необходимого права получает HTTP 403 с кодом `FORBIDDEN`; это отличается от HTTP 401 при отсутствии сессии и от `CSRF_TOKEN_INVALID`. `GET /api/auth/me` остаётся доступным и возвращает пустой список permissions пользователю без роли. Публичная регистрация недоступна. Управление пользователями и ролями разрешено только системной роли `admin`.
 
 ### POST /api/auth/login
 
@@ -45,7 +45,7 @@
     {
       "schema": "*",
       "resource": "*",
-      "operations": ["read", "create", "update"]
+      "operations": ["read", "create", "update", "delete"]
     }
   ]
 }
@@ -92,7 +92,7 @@
 
 Успешные mutations, кроме создания, возвращают HTTP 204. Отключение пользователя и сброс пароля атомарно отзывают все его сессии. Отключённый пользователь получает `INVALID_CREDENTIALS` при входе. Запрещены самоотключение и снятие собственной роли `admin`; последнего активного администратора нельзя отключить или лишить admin-прав даже другим администратором. Системные роли `admin` и `viewer` нельзя переименовать или изменить их permissions; API удаления ролей отсутствует.
 
-Права описываются массивом объектов `{"schema":"public","resource":"books","operations":["read","update"]}`. Поддерживаются только `read`, `create`, `update`; wildcard разрешён только как `"schema":"*","resource":"*"`. Пустой массив снимает все права пользовательской роли. Пустые имена, частичные wildcards, дубликаты и неизвестные операции отклоняются. Имена пользовательских ролей начинаются со строчной латинской буквы и содержат до 100 символов `a-z`, `0-9`, `_`, `-`; описание — до 500 символов. Email — до 254 символов, display name — до 200, пароль — от 12 до 1024 символов. Все значения передаются в PostgreSQL как параметры, а не интерполируются в SQL.
+Права описываются массивом объектов `{"schema":"public","resource":"books","operations":["read","update"]}`. Поддерживаются только `read`, `create`, `update`, `delete`; wildcard разрешён только как `"schema":"*","resource":"*"`. Пустой массив снимает все права пользовательской роли. Пустые имена, частичные wildcards, дубликаты и неизвестные операции отклоняются. Имена пользовательских ролей начинаются со строчной латинской буквы и содержат до 100 символов `a-z`, `0-9`, `_`, `-`; описание — до 500 символов. Email — до 254 символов, display name — до 200, пароль — от 12 до 1024 символов. Все значения передаются в PostgreSQL как параметры, а не интерполируются в SQL.
 
 Изменения ролей и назначений применяются к следующим запросам без перезапуска backend. Права нескольких ролей объединяются. Ошибки валидации используют HTTP 400 `INVALID_ADMIN_REQUEST` и при необходимости `field_errors`. Конфликты включают `ALREADY_EXISTS`, `LAST_ACTIVE_ADMIN`, `SELF_DISABLE_FORBIDDEN`, `SELF_ADMIN_REMOVAL_FORBIDDEN` и `SYSTEM_ROLE_IMMUTABLE`; отсутствующие сущности возвращают `USER_NOT_FOUND` или `ROLE_NOT_FOUND`.
 
@@ -144,7 +144,7 @@
 
 `kind` принимает значение `table` или `view`. `default` равен `null`, если значение по умолчанию отсутствует. `primary_key` отмечает ключевой столбец. `identity` — пустая строка, `always` или `by_default`; `generated` отмечает сгенерированные столбцы. `editable` истинен только для поддерживаемых несгенерированных столбцов таблицы (`always` identity не редактируется). `enum_values` содержит допустимые метки enum-типов и пуст в остальных случаях. Составные первичные и внешние ключи сохраняют порядок столбцов. Пустые коллекции возвращаются как массивы.
 
-`write_enabled` истинен только когда настроен необязательный write pool и текущий пользователь имеет хотя бы одно право `create` или `update`. Флаг не гарантирует возможность записи в каждый ресурс или столбец; для controls frontend дополнительно использует effective permissions.
+`write_enabled` истинен только когда настроен необязательный write pool и текущий пользователь имеет хотя бы одно право `create`, `update` или `delete`. Флаг не гарантирует возможность записи в каждый ресурс или столбец; для controls frontend дополнительно использует effective permissions.
 
 Если target database не настроена, endpoint возвращает HTTP 503:
 
@@ -305,6 +305,16 @@ HTTP 200:
 
 Тела запроса и успешного ответа имеют тот же формат, что и при создании. Пустой объект `values` отклоняется. Обновления используют семантику **last write wins**: в этой итерации нет столбца версии, optimistic lock или обнаружения конкурентных изменений.
 
+## DELETE /api/resources/{schema}/{resource}/records/{key}
+
+Удаляет одну запись таблицы и возвращает HTTP 204 без тела. Требуются session, отдельное право `delete` для ресурса и действительный CSRF token. Endpoint использует только `TARGET_WRITE_DATABASE_URL`; без writer DSN возвращается HTTP 403 `TARGET_READ_ONLY`. Read pool никогда не используется для удаления.
+
+`{key}` имеет тот же URL-кодированный JSON-формат, что и PATCH, и поддерживает simple/composite PK. Schema, resource и PK проверяются по свежему metadata allowlist. Идентификаторы quoting, значения передаются только как SQL parameters. Представления и таблицы без PK возвращают `RESOURCE_READ_ONLY`. Тело запроса не используется. Bulk delete и удаление нескольких записей одним запросом не поддерживаются.
+
+Backend выполняет `DELETE … RETURNING` и получает фактические before-значения от target database, а не от клиента. Если запись отсутствует, возвращается 404 `RECORD_NOT_FOUND` без audit. Любой failed DELETE, включая FK/constraint error, также не создаёт audit. Constraint responses не содержат SQL, stack traces или внутренних сведений.
+
+После target commit событие `delete` записывается в admin database с фактическим `before_data`, `after_data IS NULL`, actor из серверной сессии и simple/composite record key. Межбазовой атомарности нет. Если DELETE committed, но audit failed, возвращается HTTP 500 `AUDIT_WRITE_FAILED` с `mutation_committed=true`; запись уже удалена. Backend не повторяет DELETE и не выполняет компенсирующий INSERT. Frontend показывает отдельное локализованное предупреждение и обновляет список без повторного DELETE.
+
 ### Ошибки изменения записей
 
 Обёртка ошибок совпадает с endpoints чтения. Ошибки валидации и некоторые ошибки ограничений дополнительно содержат `field_errors` с ключами по именам столбцов:
@@ -326,11 +336,11 @@ HTTP 200:
 - HTTP 503: `TARGET_NOT_CONFIGURED`.
 - HTTP 500: `SCHEMA_INTROSPECTION_FAILED`, `RECORD_MUTATION_FAILED` или `AUDIT_WRITE_FAILED` с `mutation_committed=true`, если target mutation уже committed, но audit не записан.
 
-Ответы об ошибках ограничений используют общие сообщения и не раскрывают SQL, stack traces или внутренние сведения сервера. Размер mutation-запросов ограничен 1 МиБ, backend timeout составляет 10 секунд. DELETE endpoints не реализованы.
+Ответы об ошибках ограничений используют общие сообщения и не раскрывают SQL, stack traces или внутренние сведения сервера. Размер POST/PATCH-запросов ограничен 1 МиБ, backend timeout составляет 10 секунд. DELETE не принимает тело и удаляет только одну запись.
 
-После успешного POST или PATCH backend записывает событие `create` или `update` в `audit_events` **в admin database**. Actor определяется по серверной сессии, timestamp и UUID генерируются сервером. Для create сохраняется фактический `after` из PostgreSQL `RETURNING`; для update сохраняются фактические `before` и `after`. Перед UPDATE запись блокируется и читается в той же target-транзакции, поэтому `before` не принимается от клиента. Поддерживаются простые и составные первичные ключи.
+После успешного POST, PATCH или DELETE backend записывает событие `create`, `update` или `delete` в `audit_events` **в admin database**. Actor определяется по серверной сессии, timestamp и UUID генерируются сервером. Для create сохраняется фактический `after` из PostgreSQL `RETURNING`; для update — фактические `before` и `after`; для delete — фактический `before` из `DELETE … RETURNING` и `after = null`. Перед UPDATE запись блокируется и читается в той же target-транзакции, поэтому before не принимается от клиента. Поддерживаются простые и составные первичные ключи.
 
-Target mutation и audit находятся в разных базах и **не образуют атомарную транзакцию**. Сначала завершается target mutation, затем создаётся audit event. Ошибка target mutation не создаёт событие. Если target уже committed, но запись audit не удалась, возвращается HTTP 500 с отдельной ошибкой и сохранённой записью:
+Target mutation и audit находятся в разных базах и **не образуют атомарную транзакцию**. Сначала завершается target mutation, затем создаётся audit event. Ошибка target mutation не создаёт событие. Если target уже committed, но запись audit не удалась, возвращается HTTP 500 с отдельной ошибкой; для POST/PATCH ответ включает сохранённую запись:
 
 ```json
 {
@@ -343,7 +353,7 @@ Target mutation и audit находятся в разных базах и **не
 }
 ```
 
-`mutation_committed=true` означает, что target-запись уже сохранена и **не была откачена**. Backend не выполняет компенсирующие DELETE/UPDATE, двухфазный commit или автоматический повтор POST/PATCH. Клиент не должен автоматически повторять mutation, особенно POST; следует обновить данные записи и проверить состояние. Frontend показывает отдельное предупреждение и предлагает ручное обновление списка.
+`mutation_committed=true` означает, что target mutation уже committed и **не был откачен**. Backend не выполняет компенсирующие DELETE/UPDATE/INSERT, двухфазный commit или автоматический повтор POST/PATCH/DELETE. Клиент не должен автоматически повторять mutation; следует обновить список и проверить состояние. Для DELETE запись уже удалена, поэтому ответ не содержит `record`, а frontend показывает отдельное предупреждение об удалении без гарантированного audit.
 
 ## История изменений через Velmir
 
@@ -352,17 +362,17 @@ Target mutation и audit находятся в разных базах и **не
 - `id UUID PRIMARY KEY` — уникальный ID, по умолчанию `gen_random_uuid()`;
 - `occurred_at TIMESTAMPTZ` — серверное время, по умолчанию `clock_timestamp()`;
 - `actor_user_id BIGINT` — ссылка на `users(id)` фактического аутентифицированного actor;
-- `action TEXT` — только `create` или `update`;
+- `action TEXT` — `create`, `update` или `delete`;
 - `schema_name`, `resource_name` — технические идентификаторы ресурса;
 - `record_key JSONB` — объект с простым или составным первичным ключом;
-- `before_data JSONB` — `NULL` для create и фактическое состояние для update;
-- `after_data JSONB` — фактическое состояние, возвращённое target database.
+- `before_data JSONB` — `NULL` для create, фактическое состояние для update/delete;
+- `after_data JSONB` — фактическое состояние для create/update и `NULL` для delete.
 
-Check constraint требует after для create и before/after для update. Индексы ограничивают запрос конкретным ресурсом и ключом; endpoint для неограниченного чтения всей таблицы отсутствует. Миграции Goose транзакционны и используют идемпотентные DDL-операции. Velmir не создаёт audit-таблицы, triggers или functions в target database.
+Check constraint требует after для create, before/after для update и только before для delete. Индексы ограничивают запрос конкретным ресурсом и ключом; endpoint для неограниченного чтения всей таблицы отсутствует. Миграции Goose транзакционны и используют идемпотентные DDL-операции. Velmir не создаёт audit-таблицы, triggers или functions в target database.
 
 Поля, по имени содержащие пароли, session/CSRF tokens, password hashes, secrets или connection strings, исключаются из audit, включая вложенные JSON-объекты. Ошибки логируются только с типом ошибки и без connection strings, значений записей и секретов. Bigint/numeric используют строки records API, bytea — Base64, а JSON/JSONB обрабатывается как `json.RawMessage`/`json.Number` без преобразования через JavaScript number.
 
-История охватывает только успешные изменения, выполненные через Velmir после внедрения этой функции. Она **не гарантирует фиксацию внешних изменений**, сделанных напрямую в target database. На этом этапе DELETE, login/logout, чтение и администрирование пользователей не записываются в audit. Для таблицы без первичного ключа create может сохранить событие с пустым ключом, но history конкретной записи недоступна.
+История охватывает только успешные изменения, выполненные через Velmir после внедрения этой функции. Она **не гарантирует фиксацию внешних изменений**, сделанных напрямую в target database. Login/logout, чтение и администрирование пользователей не записываются в audit. Для таблицы без первичного ключа create может сохранить событие с пустым ключом, но history конкретной записи недоступна.
 
 ## GET /api/resources/{schema}/{resource}/records/{key}/history
 
@@ -396,7 +406,7 @@ Check constraint требует after для create и before/after для updat
 }
 ```
 
-`before` равен `null` для create. Record key и before/after используют то же безопасное JSON representation, что и records API: точные bigint/numeric строки, JSON/JSONB без number-конвертации на backend, Base64 bytea, строки дат/timestamps/UUID. Ошибки: 400 `INVALID_RECORD_KEY`, `INVALID_PAGE`, `INVALID_LIMIT`; 401/403 как указано выше; 404 `RESOURCE_NOT_FOUND`; 500 `SCHEMA_INTROSPECTION_FAILED`, `HISTORY_QUERY_FAILED`; 503 `TARGET_NOT_CONFIGURED` или `AUDIT_UNAVAILABLE`.
+`before` равен `null` для create, а `after` равен `null` для delete. История удалённой записи возвращается при повторном запросе с её key; существование target-записи не требуется и не проверяется. Record key и before/after используют то же безопасное JSON representation, что и records API: точные bigint/numeric строки, JSON/JSONB без number-конвертации на backend, Base64 bytea, строки дат/timestamps/UUID. Ошибки: 400 `INVALID_RECORD_KEY`, `INVALID_PAGE`, `INVALID_LIMIT`; 401/403 как указано выше; 404 `RESOURCE_NOT_FOUND`; 500 `SCHEMA_INTROSPECTION_FAILED`, `HISTORY_QUERY_FAILED`; 503 `TARGET_NOT_CONFIGURED` или `AUDIT_UNAVAILABLE`.
 
 ## GET /readyz
 

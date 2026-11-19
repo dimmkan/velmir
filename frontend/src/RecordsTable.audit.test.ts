@@ -35,7 +35,7 @@ describe('records audit failure', () => {
     const wrapper = mount(RecordsTable, {
       props: {
         backendBaseURL: '', schemaName: 'public', resource, writeEnabled: true,
-        readAllowed: true, createAllowed: true, updateAllowed: true,
+        readAllowed: true, createAllowed: true, updateAllowed: true, deleteAllowed: false,
       },
       global: { plugins: [createVelmirI18n()] },
     })

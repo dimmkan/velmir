@@ -100,7 +100,7 @@ func TestLocalDatabasesRecordHistory(t *testing.T) {
 		t.Helper()
 		request := httptest.NewRequest(method, target, strings.NewReader(body))
 		request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: login.Token})
-		if method == http.MethodPost || method == http.MethodPatch {
+		if method == http.MethodPost || method == http.MethodPatch || method == http.MethodDelete {
 			request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: testCSRFToken})
 			request.Header.Set(csrfHeaderName, testCSRFToken)
 		}
@@ -203,6 +203,38 @@ func TestLocalDatabasesRecordHistory(t *testing.T) {
 	router.ServeHTTP(forbidden, forbiddenRequest)
 	requireStatus(forbidden, http.StatusForbidden)
 
+	deletePath := fmt.Sprintf("/api/resources/public/categories/records/%s", url.PathEscape(fmt.Sprintf(`{"id":%q}`, categoryID)))
+	anonymousDelete := httptest.NewRecorder()
+	router.ServeHTTP(anonymousDelete, httptest.NewRequest(http.MethodDelete, deletePath, nil))
+	requireStatus(anonymousDelete, http.StatusUnauthorized)
+	withoutCSRF := httptest.NewRequest(http.MethodDelete, deletePath, nil)
+	withoutCSRF.AddCookie(&http.Cookie{Name: sessionCookieName, Value: login.Token})
+	withoutCSRFResponse := httptest.NewRecorder()
+	router.ServeHTTP(withoutCSRFResponse, withoutCSRF)
+	requireStatus(withoutCSRFResponse, http.StatusForbidden)
+	viewer, err := auth.CreateUser(ctx, adminTx, "history-viewer@example.test", "Viewer", "history-viewer-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var viewerRoleID int64
+	if err := adminTx.QueryRow(ctx, "SELECT id FROM roles WHERE name = 'viewer'").Scan(&viewerRoleID); err != nil {
+		t.Fatal(err)
+	}
+	if err := administration.AssignRole(ctx, viewer.ID, viewerRoleID); err != nil {
+		t.Fatal(err)
+	}
+	viewerLogin, err := authService.Login(ctx, viewer.Email, "history-viewer-password", "127.0.0.1:1202")
+	if err != nil {
+		t.Fatal(err)
+	}
+	viewerDelete := httptest.NewRequest(http.MethodDelete, deletePath, nil)
+	viewerDelete.AddCookie(&http.Cookie{Name: sessionCookieName, Value: viewerLogin.Token})
+	viewerDelete.AddCookie(&http.Cookie{Name: csrfCookieName, Value: testCSRFToken})
+	viewerDelete.Header.Set(csrfHeaderName, testCSRFToken)
+	viewerResponse := httptest.NewRecorder()
+	router.ServeHTTP(viewerResponse, viewerDelete)
+	requireStatus(viewerResponse, http.StatusForbidden)
+
 	authorResponse := call(http.MethodPost, "/api/resources/public/authors/records", `{"values":{"name":"`+suffix+`"}}`)
 	requireStatus(authorResponse, http.StatusCreated)
 	authorID := recordFromResponse(authorResponse)["id"].(string)
@@ -221,6 +253,46 @@ func TestLocalDatabasesRecordHistory(t *testing.T) {
 		t.Fatalf("composite history = %s", compositeHistory.Body.String())
 	}
 
+	var auditCount int
+	if err := adminTx.QueryRow(ctx, "SELECT count(*) FROM audit_events").Scan(&auditCount); err != nil {
+		t.Fatal(err)
+	}
+	authorPath := fmt.Sprintf("/api/resources/public/authors/records/%s", url.PathEscape(fmt.Sprintf(`{"id":%q}`, authorID)))
+	constraintFailure := call(http.MethodDelete, authorPath, "")
+	requireStatus(constraintFailure, http.StatusBadRequest)
+	if !strings.Contains(constraintFailure.Body.String(), `"code":"FOREIGN_KEY_VIOLATION"`) {
+		t.Fatalf("constraint delete response = %s", constraintFailure.Body.String())
+	}
+	var afterConstraintCount int
+	if err := adminTx.QueryRow(ctx, "SELECT count(*) FROM audit_events").Scan(&afterConstraintCount); err != nil || afterConstraintCount != auditCount {
+		t.Fatalf("failed delete changed audit count from %d to %d, error = %v", auditCount, afterConstraintCount, err)
+	}
+
+	deletedLink := call(http.MethodDelete, linkPath, "")
+	requireStatus(deletedLink, http.StatusNoContent)
+	if deletedLink.Body.Len() != 0 {
+		t.Fatalf("delete returned a body: %q", deletedLink.Body.String())
+	}
+	compositeHistory = call(http.MethodGet, historyPath("public", "book_categories", compositeKey, "?limit=1"), "")
+	requireStatus(compositeHistory, http.StatusOK)
+	if !strings.Contains(compositeHistory.Body.String(), `"action":"delete"`) || !strings.Contains(compositeHistory.Body.String(), `"note":"after"`) || !strings.Contains(compositeHistory.Body.String(), `"after":null`) {
+		t.Fatalf("composite delete history = %s", compositeHistory.Body.String())
+	}
+	bookPath := fmt.Sprintf("/api/resources/public/books/records/%s", url.PathEscape(fmt.Sprintf(`{"id":%q}`, bookID)))
+	requireStatus(call(http.MethodDelete, bookPath, ""), http.StatusNoContent)
+	categoryPath := fmt.Sprintf("/api/resources/public/categories/records/%s", url.PathEscape(fmt.Sprintf(`{"id":%q}`, categoryID)))
+	requireStatus(call(http.MethodDelete, categoryPath, ""), http.StatusNoContent)
+	deletedHistory := call(http.MethodGet, historyPath("public", "categories", key, "?limit=1"), "")
+	requireStatus(deletedHistory, http.StatusOK)
+	if !strings.Contains(deletedHistory.Body.String(), `"action":"delete"`) || !strings.Contains(deletedHistory.Body.String(), `"name":"`+suffix+`-updated"`) || !strings.Contains(deletedHistory.Body.String(), `"after":null`) {
+		t.Fatalf("deleted record history = %s", deletedHistory.Body.String())
+	}
+	beforeMissingCount := len(storeHistory(t, ctx, auditStore, key).Events)
+	requireStatus(call(http.MethodDelete, categoryPath, ""), http.StatusNotFound)
+	if after := len(storeHistory(t, ctx, auditStore, key).Events); after != beforeMissingCount {
+		t.Fatalf("missing delete changed audit count from %d to %d", beforeMissingCount, after)
+	}
+
 	failingRouter := NewRouter(nil, readPool, inspector, lister, writer, authService, provider, failingAuditStore{Store: auditStore}, false)
 	committedName := suffix + "-committed-without-audit"
 	committedRequest := httptest.NewRequest(http.MethodPost, "/api/resources/public/categories/records", strings.NewReader(`{"values":{"name":"`+committedName+`"}}`))
@@ -236,6 +308,30 @@ func TestLocalDatabasesRecordHistory(t *testing.T) {
 	var storedName string
 	if err := writePool.QueryRow(ctx, "SELECT name FROM public.categories WHERE name = $1", committedName).Scan(&storedName); err != nil || storedName != committedName {
 		t.Fatalf("committed target record was compensated or lost: name = %q, error = %v", storedName, err)
+	}
+
+	auditFailureName := suffix + "-deleted-without-audit"
+	auditFailureCreate := call(http.MethodPost, "/api/resources/public/categories/records", fmt.Sprintf(`{"values":{"name":%q}}`, auditFailureName))
+	requireStatus(auditFailureCreate, http.StatusCreated)
+	auditFailureID := recordFromResponse(auditFailureCreate)["id"].(string)
+	auditFailureKey := map[string]any{"id": auditFailureID}
+	auditFailurePath := fmt.Sprintf("/api/resources/public/categories/records/%s", url.PathEscape(fmt.Sprintf(`{"id":%q}`, auditFailureID)))
+	auditFailureRequest := httptest.NewRequest(http.MethodDelete, auditFailurePath, nil)
+	auditFailureRequest.AddCookie(&http.Cookie{Name: sessionCookieName, Value: login.Token})
+	auditFailureRequest.AddCookie(&http.Cookie{Name: csrfCookieName, Value: testCSRFToken})
+	auditFailureRequest.Header.Set(csrfHeaderName, testCSRFToken)
+	auditFailureResponse := httptest.NewRecorder()
+	failingRouter.ServeHTTP(auditFailureResponse, auditFailureRequest)
+	requireStatus(auditFailureResponse, http.StatusInternalServerError)
+	if !strings.Contains(auditFailureResponse.Body.String(), `"code":"AUDIT_WRITE_FAILED"`) || !strings.Contains(auditFailureResponse.Body.String(), `"mutation_committed":true`) {
+		t.Fatalf("committed delete audit failure = %s", auditFailureResponse.Body.String())
+	}
+	var stillExists bool
+	if err := writePool.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM public.categories WHERE id = $1)", auditFailureID).Scan(&stillExists); err != nil || stillExists {
+		t.Fatalf("deleted record was restored or compensated: exists = %v, error = %v", stillExists, err)
+	}
+	if events := storeHistory(t, ctx, auditStore, auditFailureKey).Events; len(events) != 1 || events[0].Action != audit.Create {
+		t.Fatalf("failed audit was retried or wrote a delete event: %+v", events)
 	}
 }
 

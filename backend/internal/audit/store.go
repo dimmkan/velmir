@@ -23,6 +23,7 @@ type Action string
 const (
 	Create Action = "create"
 	Update Action = "update"
+	Delete Action = "delete"
 )
 
 type Actor struct {
@@ -93,7 +94,7 @@ func (s *Store) Record(ctx context.Context, input Input) error {
 	if input.ActorUserID <= 0 || input.Schema == "" || input.Resource == "" || !json.Valid(input.RecordKey) {
 		return errors.New("invalid audit event identity")
 	}
-	if input.Action != Create && input.Action != Update {
+	if input.Action != Create && input.Action != Update && input.Action != Delete {
 		return errors.New("invalid audit event action")
 	}
 	if input.Action == Create && (input.Before != nil || input.After == nil) {
@@ -101,6 +102,9 @@ func (s *Store) Record(ctx context.Context, input Input) error {
 	}
 	if input.Action == Update && (input.Before == nil || input.After == nil) {
 		return errors.New("update audit event must contain before and after data")
+	}
+	if input.Action == Delete && (input.Before == nil || input.After != nil) {
+		return errors.New("delete audit event must contain only before data")
 	}
 
 	before, err := marshalRecord(input.Before)

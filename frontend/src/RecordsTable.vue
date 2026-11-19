@@ -20,8 +20,9 @@ import {
 import type { ResourceMetadata } from './schema'
 import RecordForm from './RecordForm.vue'
 import RecordHistory from './RecordHistory.vue'
+import RecordDeleteDialog from './RecordDeleteDialog.vue'
 import { canCreateRecord, canUpdateRecord, type FormMode } from './recordForm'
-import { buildRecordKey } from './mutations'
+import { buildRecordKey, deleteRecord, MutationRequestError } from './mutations'
 import type { RecordRow } from './records'
 
 const props = defineProps<{
@@ -32,6 +33,7 @@ const props = defineProps<{
   readAllowed: boolean
   createAllowed: boolean
   updateAllowed: boolean
+  deleteAllowed: boolean
 }>()
 const emit = defineEmits<{ 'dirty-change': [dirty: boolean] }>()
 const { t, locale } = useI18n()
@@ -52,7 +54,11 @@ const filterNull = ref('true')
 const formMode = ref<FormMode | null>(null)
 const activeRecord = ref<RecordRow | undefined>()
 const historyKey = ref('')
-const auditWarning = ref(false)
+const auditWarning = ref<'save' | 'delete' | ''>('')
+const deleteTarget = ref<RecordRow | null>(null)
+const deleting = ref(false)
+const deleteErrorMessage = ref('')
+const deleteSuccess = ref(false)
 
 let controller: AbortController | null = null
 let requestID = 0
@@ -70,8 +76,9 @@ const canAddFilter = computed(() =>
 )
 const canCreate = computed(() => canCreateRecord(props.writeEnabled, props.resource, props.createAllowed))
 const canUpdate = computed(() => canUpdateRecord(props.writeEnabled, props.resource, props.updateAllowed))
+const canDelete = computed(() => props.writeEnabled && props.deleteAllowed && props.resource.kind === 'table' && props.resource.primary_key.length > 0)
 const canViewHistory = computed(() => props.readAllowed && props.resource.primary_key.length > 0)
-const hasMutationPermission = computed(() => props.createAllowed || props.updateAllowed)
+const hasMutationPermission = computed(() => props.createAllowed || props.updateAllowed || props.deleteAllowed)
 
 function openCreateForm() {
   historyKey.value = ''
@@ -87,7 +94,7 @@ function openEditForm(record: RecordRow) {
 
 function openHistory(record: RecordRow) {
   closeForm()
-  auditWarning.value = false
+  auditWarning.value = ''
   historyKey.value = buildRecordKey(props.resource, record)
 }
 
@@ -97,21 +104,83 @@ function closeForm() {
 }
 
 function recordSaved() {
-  auditWarning.value = false
+  auditWarning.value = ''
   closeForm()
   void loadRecords()
 }
 
 function recordAuditFailed() {
   closeForm()
-  auditWarning.value = true
+  auditWarning.value = 'save'
   void loadRecords()
+}
+
+const deleteTargetKey = computed(() =>
+  deleteTarget.value ? buildRecordKey(props.resource, deleteTarget.value) : '',
+)
+
+function openDeleteDialog(record: RecordRow, event: Event) {
+  if (event.currentTarget instanceof HTMLElement) event.currentTarget.focus()
+  closeForm()
+  historyKey.value = ''
+  auditWarning.value = ''
+  deleteSuccess.value = false
+  deleteErrorMessage.value = ''
+  deleteTarget.value = record
+}
+
+function closeDeleteDialog() {
+  if (deleting.value) return
+  deleteTarget.value = null
+  deleteErrorMessage.value = ''
+}
+
+async function confirmDelete() {
+  if (deleting.value || !deleteTarget.value) return
+  const key = deleteTargetKey.value
+  const schemaName = props.schemaName
+  const resourceName = props.resource.name
+  const wasLastRecordOnPage = result.value?.records.length === 1
+  deleting.value = true
+  deleteErrorMessage.value = ''
+  try {
+    await deleteRecord(props.backendBaseURL, schemaName, resourceName, key)
+    if (result.value) {
+      result.value = {
+        ...result.value,
+        records: result.value.records.filter((record) => buildRecordKey(props.resource, record) !== key),
+      }
+    }
+    deleteTarget.value = null
+    if (wasLastRecordOnPage && state.value.page > 1) {
+      commit({ ...state.value, page: state.value.page - 1 })
+    } else {
+      await loadRecords()
+    }
+    deleteSuccess.value = true
+  } catch (error) {
+    if (error instanceof MutationRequestError && error.code === 'AUDIT_WRITE_FAILED' && error.mutationCommitted) {
+      deleteTarget.value = null
+      auditWarning.value = 'delete'
+      await loadRecords()
+    } else if (error instanceof MutationRequestError) {
+      deleteErrorMessage.value = ['FOREIGN_KEY_VIOLATION', 'CHECK_VIOLATION', 'NOT_NULL_VIOLATION', 'UNIQUE_VIOLATION'].includes(error.code)
+        ? 'records.delete.constraint'
+        : errorTranslationKey(error.code, error.status)
+    } else {
+      deleteErrorMessage.value = 'errors.network'
+    }
+  } finally {
+    deleting.value = false
+  }
 }
 
 function syncFromURL() {
   closeForm()
+  closeDeleteDialog()
   historyKey.value = ''
-  auditWarning.value = false
+  auditWarning.value = ''
+  deleteSuccess.value = false
   state.value = parseRecordsQuery(window.location.search, props.resource)
   searchInput.value = state.value.search
   searchColumn.value = state.value.searchColumns.length === 1 ? state.value.searchColumns[0] : ''
@@ -261,9 +330,21 @@ onBeforeUnmount(() => {
       @dirty-change="emit('dirty-change', $event)"
     />
 
+    <RecordDeleteDialog
+      v-if="deleteTarget"
+      :resource-name="`${schemaName}.${resource.name}`"
+      :record-key="deleteTargetKey"
+      :pending="deleting"
+      :error-message="deleteErrorMessage"
+      @cancel="closeDeleteDialog"
+      @confirm="confirmDelete"
+    />
+
+    <div v-if="deleteSuccess" class="delete-success" role="status">{{ t('records.delete.success') }}</div>
+
     <div v-if="auditWarning" class="audit-warning" role="alert">
-      <strong>{{ t('history.auditFailedTitle') }}</strong>
-      <p>{{ t('history.auditFailed') }}</p>
+      <strong>{{ t(auditWarning === 'delete' ? 'history.deleteAuditFailedTitle' : 'history.auditFailedTitle') }}</strong>
+      <p>{{ t(auditWarning === 'delete' ? 'history.deleteAuditFailed' : 'history.auditFailed') }}</p>
       <button type="button" class="secondary-button" :disabled="loading" @click="loadRecords">{{ t('history.refreshRecords') }}</button>
     </div>
 
@@ -358,7 +439,7 @@ onBeforeUnmount(() => {
               <span v-else>{{ column.name }}</span>
               <small>{{ column.data_type }}</small>
             </th>
-            <th v-if="canUpdate || canViewHistory">{{ t('records.actions') }}</th>
+            <th v-if="canUpdate || canViewHistory || canDelete">{{ t('records.actions') }}</th>
           </tr>
         </thead>
         <tbody>
@@ -368,10 +449,17 @@ onBeforeUnmount(() => {
               :key="column.name"
               :class="{ 'null-value': record[column.name] === null, 'json-value': typeof record[column.name] === 'object' && record[column.name] !== null }"
             >{{ formatRecordValue(record[column.name], column.data_type, locale) }}</td>
-            <td v-if="canUpdate || canViewHistory" class="record-action-cell">
+            <td v-if="canUpdate || canViewHistory || canDelete" class="record-action-cell">
               <div class="record-row-actions">
                 <button v-if="canUpdate" type="button" class="secondary-button" @click="openEditForm(record)">{{ t('common.edit') }}</button>
                 <button v-if="canViewHistory" type="button" class="secondary-button" @click="openHistory(record)">{{ t('history.open') }}</button>
+                <button
+                  v-if="canDelete"
+                  type="button"
+                  class="danger-button record-delete-button"
+                  :aria-label="t('records.delete.recordLabel', { key: buildRecordKey(resource, record) })"
+                  @click="openDeleteDialog(record, $event)"
+                >{{ t('records.delete.action') }}</button>
               </div>
             </td>
           </tr>

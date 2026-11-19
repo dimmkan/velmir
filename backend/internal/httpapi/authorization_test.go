@@ -18,7 +18,7 @@ func newRBACTestRouter(permissions authorization.Permissions, inspector schemaIn
 	router := NewRouter(nil, nil, inspector, lister, writer, testAuthService{user: testUser()}, testPermissionProvider{permissions: permissions}, nil, false)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "test-session"})
-		if r.Method == http.MethodPost || r.Method == http.MethodPatch {
+		if r.Method == http.MethodPost || r.Method == http.MethodPatch || r.Method == http.MethodDelete {
 			r.AddCookie(&http.Cookie{Name: csrfCookieName, Value: testCSRFToken})
 			r.Header.Set(csrfHeaderName, testCSRFToken)
 		}
@@ -109,13 +109,16 @@ func TestViewerCanReadButCannotMutateWithValidCSRF(t *testing.T) {
 	}
 }
 
-func TestAdminCanReadCreateAndUpdate(t *testing.T) {
+func TestAdminCanReadCreateUpdateAndDelete(t *testing.T) {
 	writer := recordWriterFunc{
 		create: func(context.Context, string, introspection.Resource, records.RecordValues) (map[string]any, error) {
 			return map[string]any{"id": "1"}, nil
 		},
 		update: func(context.Context, string, introspection.Resource, string, records.RecordValues) (records.UpdateResult, error) {
 			return records.UpdateResult{After: map[string]any{"id": "1"}}, nil
+		},
+		delete: func(context.Context, string, introspection.Resource, string) (map[string]any, error) {
+			return map[string]any{"id": "1"}, nil
 		},
 	}
 	lister := recordListerFunc(func(context.Context, string, introspection.Resource, records.ListOptions) (records.ListResult, error) {
@@ -132,6 +135,7 @@ func TestAdminCanReadCreateAndUpdate(t *testing.T) {
 		{method: http.MethodGet, target: "/api/resources/public/items/records", want: http.StatusOK},
 		{method: http.MethodPost, target: "/api/resources/public/items/records", body: `{"values":{}}`, want: http.StatusCreated},
 		{method: http.MethodPatch, target: `/api/resources/public/items/records/%7B%22id%22%3A%221%22%7D`, body: `{"values":{"name":"x"}}`, want: http.StatusOK},
+		{method: http.MethodDelete, target: `/api/resources/public/items/records/%7B%22id%22%3A%221%22%7D`, want: http.StatusNoContent},
 	} {
 		response := httptest.NewRecorder()
 		router.ServeHTTP(response, httptest.NewRequest(test.method, test.target, strings.NewReader(test.body)))
@@ -193,7 +197,7 @@ func TestMeReturnsEffectivePermissions(t *testing.T) {
 	}
 }
 
-func TestAuthorizationFailureAndMissingDeleteEndpoint(t *testing.T) {
+func TestAuthorizationFailureDoesNotLeakInternals(t *testing.T) {
 	router := NewRouter(nil, nil, recordsInspector(), nil, nil, testAuthService{user: testUser()}, testPermissionProvider{err: errors.New("database details")}, nil, false)
 	request := httptest.NewRequest(http.MethodGet, "/api/schema", nil)
 	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "test-session"})
@@ -203,9 +207,4 @@ func TestAuthorizationFailureAndMissingDeleteEndpoint(t *testing.T) {
 		t.Fatalf("authorization failure = %d %s", response.Code, response.Body.String())
 	}
 
-	response = httptest.NewRecorder()
-	newRBACTestRouter(adminTestPermissions(), recordsInspector(), nil, nil).ServeHTTP(response, httptest.NewRequest(http.MethodDelete, "/api/resources/public/items/records/1", nil))
-	if response.Code != http.StatusNotFound && response.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("DELETE status = %d, want 404 or 405", response.Code)
-	}
 }

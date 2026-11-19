@@ -44,6 +44,7 @@ func adminTestPermissions() authorization.Permissions {
 		{Schema: "*", Resource: "*", Operation: authorization.Read},
 		{Schema: "*", Resource: "*", Operation: authorization.Create},
 		{Schema: "*", Resource: "*", Operation: authorization.Update},
+		{Schema: "*", Resource: "*", Operation: authorization.Delete},
 	})
 }
 
@@ -65,7 +66,7 @@ func newTestRouter(adminDatabase, targetDatabase databasePinger, inspector schem
 	router := NewRouter(adminDatabase, targetDatabase, inspector, lister, writer, testAuthService{user: testUser()}, testPermissionProvider{permissions: adminTestPermissions()}, nil, false)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "test-session"})
-		if r.Method == http.MethodPost || r.Method == http.MethodPatch {
+		if r.Method == http.MethodPost || r.Method == http.MethodPatch || r.Method == http.MethodDelete {
 			r.AddCookie(&http.Cookie{Name: csrfCookieName, Value: testCSRFToken})
 			r.Header.Set(csrfHeaderName, testCSRFToken)
 		}

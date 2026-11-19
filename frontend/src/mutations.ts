@@ -50,6 +50,27 @@ export async function updateRecord(
   return sendMutation(backendBaseURL, schema, resource, values, key, csrfToken)
 }
 
+export async function deleteRecord(
+  backendBaseURL: string,
+  schema: string,
+  resource: string,
+  key: string,
+  csrfToken = getCSRFToken(),
+): Promise<void> {
+  const response = await fetch(
+    `${backendBaseURL}/api/resources/${encodeURIComponent(schema)}/${encodeURIComponent(resource)}/records/${encodeURIComponent(key)}`,
+    {
+      method: 'DELETE',
+      headers: { Accept: 'application/json', 'X-CSRF-Token': csrfToken },
+      credentials: 'same-origin',
+    },
+  )
+  if (response.status === 204) return
+  const body: unknown = await response.json().catch(() => null)
+  if (response.status === 401) handleUnauthorized()
+  throw readMutationError(body, response.status)
+}
+
 async function sendMutation(
   backendBaseURL: string,
   schema: string,

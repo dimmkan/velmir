@@ -7,7 +7,7 @@ import (
 )
 
 func TestRoleAndPermissionValidation(t *testing.T) {
-	valid := authorization.Permissions{{Schema: "public", Resource: "books", Operations: []authorization.Operation{authorization.Read, authorization.Update}}}
+	valid := authorization.Permissions{{Schema: "public", Resource: "books", Operations: []authorization.Operation{authorization.Read, authorization.Update, authorization.Delete}}}
 	if _, _, err := validateRole("content-editor", "Editors", valid); err != nil {
 		t.Fatalf("valid role rejected: %v", err)
 	}
@@ -18,7 +18,7 @@ func TestRoleAndPermissionValidation(t *testing.T) {
 	}{
 		{name: "empty role name", role: "", permissions: valid},
 		{name: "invalid role name", role: "Admin", permissions: valid},
-		{name: "unknown operation", role: "editor", permissions: authorization.Permissions{{Schema: "public", Resource: "books", Operations: []authorization.Operation{"delete"}}}},
+		{name: "unknown operation", role: "editor", permissions: authorization.Permissions{{Schema: "public", Resource: "books", Operations: []authorization.Operation{"publish"}}}},
 		{name: "partial wildcard", role: "editor", permissions: authorization.Permissions{{Schema: "*", Resource: "books", Operations: []authorization.Operation{authorization.Read}}}},
 		{name: "empty resource", role: "editor", permissions: authorization.Permissions{{Schema: "public", Resource: "", Operations: []authorization.Operation{authorization.Read}}}},
 		{name: "duplicate operation", role: "editor", permissions: authorization.Permissions{{Schema: "public", Resource: "books", Operations: []authorization.Operation{authorization.Read, authorization.Read}}}},

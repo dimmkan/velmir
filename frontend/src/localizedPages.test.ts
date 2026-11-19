@@ -45,6 +45,7 @@ const RecordsHost = defineComponent({
     readAllowed: { type: Boolean, default: true },
     createAllowed: { type: Boolean, default: true },
     updateAllowed: { type: Boolean, default: true },
+    deleteAllowed: { type: Boolean, default: false },
   },
   data: () => ({ resource }),
   template: `
@@ -57,6 +58,7 @@ const RecordsHost = defineComponent({
         :read-allowed="readAllowed"
         :create-allowed="createAllowed"
         :update-allowed="updateAllowed"
+        :delete-allowed="deleteAllowed"
       />
       <AppFooter />
     </div>

@@ -12,6 +12,7 @@ const (
 	Read   Operation = "read"
 	Create Operation = "create"
 	Update Operation = "update"
+	Delete Operation = "delete"
 )
 
 type Permission struct {
@@ -54,8 +55,8 @@ func EffectivePermissions(grants []Grant) Permissions {
 
 	permissions := make(Permissions, 0, len(keys))
 	for _, key := range keys {
-		permission := Permission{Schema: key[0], Resource: key[1], Operations: make([]Operation, 0, 3)}
-		for _, operation := range []Operation{Read, Create, Update} {
+		permission := Permission{Schema: key[0], Resource: key[1], Operations: make([]Operation, 0, 4)}
+		for _, operation := range []Operation{Read, Create, Update, Delete} {
 			if _, ok := operations[key][operation]; ok {
 				permission.Operations = append(permission.Operations, operation)
 			}
@@ -127,7 +128,7 @@ func ValidatePermissions(permissions Permissions) error {
 		seen := make(map[Operation]struct{}, len(permission.Operations))
 		for _, operation := range permission.Operations {
 			if !validOperation(operation) {
-				return errors.New("permissions support only read, create and update operations")
+				return errors.New("permissions support only read, create, update and delete operations")
 			}
 			if _, exists := seen[operation]; exists {
 				return errors.New("duplicate operations are not allowed")
@@ -139,5 +140,5 @@ func ValidatePermissions(permissions Permissions) error {
 }
 
 func validOperation(operation Operation) bool {
-	return operation == Read || operation == Create || operation == Update
+	return operation == Read || operation == Create || operation == Update || operation == Delete
 }

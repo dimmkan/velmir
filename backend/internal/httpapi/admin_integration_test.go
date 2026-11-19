@@ -127,13 +127,18 @@ func TestLocalAdminDatabaseAdministrationAPI(t *testing.T) {
 	requireStatus(request(http.MethodPatch, fmt.Sprintf("/api/admin/roles/%d", editorRoleID), `{"name":"integration_editor","description":"Updated editor"}`, true), http.StatusNoContent)
 	requireStatus(request(http.MethodPut, fmt.Sprintf("/api/admin/users/%d/roles/%d", managedID, editorRoleID), "", true), http.StatusNoContent)
 	permissions, err := provider.Permissions(ctx, managedID)
-	if err != nil || !permissions.Allows("public", "books", authorization.Read) {
-		t.Fatalf("assigned permissions = %#v, error = %v", permissions, err)
+	if err != nil || !permissions.Allows("public", "books", authorization.Read) || permissions.Allows("public", "books", authorization.Delete) {
+		t.Fatalf("custom role received delete without an explicit grant: %#v, error = %v", permissions, err)
 	}
 	requireStatus(request(http.MethodPut, fmt.Sprintf("/api/admin/roles/%d/permissions", editorRoleID), `{"permissions":[{"schema":"sales","resource":"orders","operations":["update"]}]}`, true), http.StatusNoContent)
 	permissions, err = provider.Permissions(ctx, managedID)
-	if err != nil || permissions.Allows("public", "books", authorization.Read) || !permissions.Allows("sales", "orders", authorization.Update) {
-		t.Fatalf("permissions were not immediately replaced: %#v, error = %v", permissions, err)
+	if err != nil || permissions.Allows("public", "books", authorization.Read) || !permissions.Allows("sales", "orders", authorization.Update) || permissions.Allows("sales", "orders", authorization.Delete) {
+		t.Fatalf("permissions were not immediately replaced or delete was implicit: %#v, error = %v", permissions, err)
+	}
+	requireStatus(request(http.MethodPut, fmt.Sprintf("/api/admin/roles/%d/permissions", editorRoleID), `{"permissions":[{"schema":"sales","resource":"orders","operations":["update","delete"]}]}`, true), http.StatusNoContent)
+	permissions, err = provider.Permissions(ctx, managedID)
+	if err != nil || !permissions.Allows("sales", "orders", authorization.Delete) {
+		t.Fatalf("explicit delete was not immediately effective: %#v, error = %v", permissions, err)
 	}
 	response = request(http.MethodPost, "/api/admin/roles", `{"name":"integration_reader","description":"Reader","permissions":[{"schema":"archive","resource":"items","operations":["read"]}]}`, true)
 	requireStatus(response, http.StatusCreated)

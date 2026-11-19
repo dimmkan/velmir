@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { authState } from './auth'
-import { buildRecordKey, createRecord, MutationRequestError, updateRecord } from './mutations'
+import { buildRecordKey, createRecord, deleteRecord, MutationRequestError, updateRecord } from './mutations'
 import type { ResourceMetadata } from './schema'
 
 const resource: ResourceMetadata = {
@@ -67,6 +67,20 @@ describe('record mutations', () => {
       code: 'AUDIT_WRITE_FAILED', status: 500, mutationCommitted: true, record: { id: '9', name: 'committed' },
     })
     expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('deletes one URL-encoded key with CSRF and accepts an empty 204 response', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const key = '{"book_id":"1","category_id":"2"}'
+
+    await expect(deleteRecord('', 'public', 'links', key, 'test-csrf-token')).resolves.toBeUndefined()
+
+    expect(fetchMock).toHaveBeenCalledWith(`/api/resources/public/links/records/${encodeURIComponent(key)}`, expect.objectContaining({
+      method: 'DELETE',
+      headers: expect.objectContaining({ 'X-CSRF-Token': 'test-csrf-token' }),
+      credentials: 'same-origin',
+    }))
   })
 })
 

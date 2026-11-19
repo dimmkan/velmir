@@ -2,7 +2,7 @@
 
 [Русская версия](README.md)
 
-Velmir is a metadata-driven PostgreSQL admin panel. The current stage provides schema introspection, universal record lists with pagination, sorting, search and typed filters, automatic forms for creating and editing records, create/update history for changes made through Velmir, server-side session authentication, RBAC and user/role management UI. Record deletion, relations UI, files and automation are not implemented.
+Velmir is a metadata-driven PostgreSQL admin panel. The current stage provides schema introspection, universal record lists with pagination, sorting, search and typed filters, automatic forms for creating and editing records, confirmed record deletion, change history for changes made through Velmir, server-side session authentication, RBAC and user/role management UI. Relations UI, files and automation are not implemented.
 
 ## Requirements
 
@@ -57,11 +57,11 @@ Session cookies use `SameSite=Lax`; idle expiration defaults to `30m` and absolu
 
 ## Roles, permissions and user management
 
-Access is denied by default. Roles can be combined: a user's effective permissions are the union of every assigned role. The built-in `admin` role allows reading, creating and updating every resource; `viewer` allows reading only. `read`, `create` and `update` grants can target a specific schema and resource. DELETE is unavailable to every role, including `admin`.
+Access is denied by default. Roles can be combined: a user's effective permissions are the union of every assigned role. The built-in `admin` role allows reading, creating, updating and deleting every resource; `viewer` allows reading only. `read`, `create`, `update` and `delete` grants can target a specific schema and resource. The `delete` grant is independent of other grants and writer availability.
 
-The bootstrap administrator receives `admin` automatically. A new user receives no role by default and can access only `/api/auth/me` with an empty permissions list; protected resources return 403. The backend filters `/api/schema` by `read`, and the frontend hides unavailable resources and create/update controls. Viewers see an explicit read-only state.
+The bootstrap administrator receives `admin` automatically. A new user receives no role by default and can access only `/api/auth/me` with an empty permissions list; protected resources return 403. The backend filters `/api/schema` by `read`, and the frontend hides unavailable resources and create/update/delete controls. Viewers see an explicit read-only state.
 
-Administrators have a separate **Administration** section for creating users, changing display names, enabling/disabling accounts, resetting passwords and assigning roles, plus creating and editing custom roles and permissions. The section is hidden from viewers and users without roles, while the backend independently checks the `admin` system role, session and CSRF. Disabling an account and resetting a password revoke all user sessions. Self-disable, removing your own `admin` role and removing admin rights from the last active administrator are forbidden. System roles are immutable; wildcard `*.*` and concrete schema/resource grants support only `read`, `create` and `update`. Changes apply to subsequent requests without a restart. See `docs/api_en.md` for complete API contracts.
+Administrators have a separate **Administration** section for creating users, changing display names, enabling/disabling accounts, resetting passwords and assigning roles, plus creating and editing custom roles and permissions. The section is hidden from viewers and users without roles, while the backend independently checks the `admin` system role, session and CSRF. Disabling an account and resetting a password revoke all user sessions. Self-disable, removing your own `admin` role and removing admin rights from the last active administrator are forbidden. System roles are immutable; wildcard `*.*` and concrete schema/resource grants support `read`, `create`, `update` and `delete`. A custom role receives `delete` only after an explicit assignment in PermissionEditor; the migration does not grant it to existing custom roles. Changes apply to subsequent requests without a restart. See `docs/api_en.md` for complete API contracts.
 
 The `cmd/users` CLI remains available for local administration and access recovery. After applying migrations, run these commands from the `backend` directory:
 
@@ -83,40 +83,48 @@ For a local viewer check, these two commands create the account and assign `view
 - **Admin database** (`localhost:5432`, database `velmir_admin`) belongs to Velmir. Goose migrations run only here and create the migration baseline plus `users`, `sessions`, `roles`, `user_roles`, `role_permissions` and `audit_events`.
 - **Demo target database** (`localhost:5433`, database `velmir_demo`) is a separate PostgreSQL instance. Docker initializes demonstration tables, records, a view, primary keys and foreign keys.
 - `TARGET_DATABASE_URL` is the existing read-only target connection. Its pool always sets `default_transaction_read_only=on`; it is used for introspection and record reads and is never reused for mutations.
-- `TARGET_WRITE_DATABASE_URL` is a separate **optional** connection used only for INSERT and UPDATE. The example points to the local demo writer role. Leave it empty or remove it to disable all mutation controls and make mutation endpoints return `TARGET_READ_ONLY`.
+- `TARGET_WRITE_DATABASE_URL` is a separate **optional** connection used only for INSERT, UPDATE and DELETE. The example points to the local demo writer role. Leave it empty or remove it to disable all mutation controls and make mutation endpoints return `TARGET_READ_ONLY`.
 - Velmir never runs migrations, automatic GRANT statements or DDL against a target database. Do not point integration tests or either target URL at a real database for local demo setup.
 
 The demo `velmir_writer` role has only:
 
 - `CONNECT` on `velmir_demo` and `USAGE` on schema `public`;
-- `SELECT`, `INSERT`, `UPDATE` on the existing demo tables;
+- `SELECT`, `INSERT`, `UPDATE`, `DELETE` on the existing demo tables;
 - `USAGE`, `SELECT`, `UPDATE` on the existing demo sequences, required for identity/default sequence values.
 
-It has no `CREATE`, `ALTER`, `DROP`, `TRUNCATE` or `DELETE` privilege. The `velmir_readonly` role retains read-only transactions and SELECT privileges.
+It has no `CREATE`, `ALTER`, `DROP` or `TRUNCATE` privilege. The `velmir_readonly` role retains read-only transactions and SELECT privileges. For an already initialized **local-only** `velmir_demo`, the owner can grant DELETE once without recreating the volume:
+
+```powershell
+docker compose exec target-db psql -U velmir_target_admin -d velmir_demo -v ON_ERROR_STOP=1 -c "GRANT DELETE ON ALL TABLES IN SCHEMA public TO velmir_writer;"
+```
+
+Do not run this command against a real database. In production, the database owner configures the required privileges manually; the application never grants them automatically.
 
 To run without a target database, leave `TARGET_DATABASE_URL` empty. The backend still starts, readiness reports `not_configured`, and `/api/schema` returns `TARGET_NOT_CONFIGURED`.
 
-## Creating and editing records
+## Creating, editing and deleting records
 
 The frontend builds all forms from `/api/schema`; there are no table-specific forms. Supported inputs cover text, boolean, integer, bigint/numeric, date, timestamps, UUID, enums and JSON. Nullable fields have an explicit NULL control, and create forms can explicitly use a database default. Generated and `always` identity fields are not required or editable.
 
-Updates require a primary key, including composite keys, and cannot change primary-key fields. Tables without a primary key allow creation but not updates. Views are read-only. Unsupported PostgreSQL types are displayed but not edited automatically. PostgreSQL not-null, unique, foreign-key and check violations are shown as API/form errors.
+Updates and deletes require a primary key, including composite keys, and updates cannot change primary-key fields. Tables without a primary key allow creation but not updates or deletes. Views are read-only. Unsupported PostgreSQL types are displayed but not edited automatically. PostgreSQL not-null, unique, foreign-key and check violations are shown as API/form errors.
 
-After saving, the current record list is refreshed. Forms warn about unsaved changes before closing or leaving the page. Concurrent updates currently have **last write wins** semantics; optimistic locking and conflict detection are not implemented. Deletion is intentionally unavailable.
+After saving, the current record list is refreshed. Forms warn about unsaved changes before closing or leaving the page. Concurrent updates currently have **last write wins** semantics; optimistic locking and conflict detection are not implemented.
+
+**Delete** is available only with `delete` permission, a configured writer and a table with a PK. The accessible dialog displays the resource and exact simple/composite record identifier, warns about irreversibility and blocks repeat submission. After 204, the list refreshes; deleting the last record on a page navigates to the previous page. Bulk delete is not available: one request deletes exactly one record.
 
 See `docs/api_en.md` for mutation request bodies, record-key encoding and error codes.
 
-## Create and update history
+## Create, update and delete history
 
-Every successful POST/PATCH through Velmir creates an `audit_events` row in the admin database with a UUID, server timestamp, actual actor, `create`/`update` action, schema/resource, simple or composite record key and safe before/after JSONB. Create stores after; update stores before and after from the actual target state. Passwords, tokens, secrets and connection strings are omitted. Bigint/numeric remain strings, bytea uses Base64, and JSON/JSONB preserves precision on the backend.
+Every successful POST/PATCH/DELETE through Velmir creates an `audit_events` row in the admin database with a UUID, server timestamp, actual actor, `create`/`update`/`delete` action, schema/resource, simple or composite record key and safe before/after JSONB. Create stores after; update stores before and after; delete stores actual before values from `DELETE … RETURNING` and `after_data IS NULL`. Passwords, tokens, secrets and connection strings are omitted. Bigint/numeric remain strings, bytea uses Base64, and JSON/JSONB preserves precision on the backend.
 
-For a row with a primary key, **History** opens a generic panel with the actor, `Intl`-formatted time, action and changed fields. Russian and English switch without reload; pagination and mobile layouts are supported. `GET /api/resources/{schema}/{resource}/records/{key}/history` requires a session and `read`: no session returns 401, while no read grant returns 403 without a login redirect. Changes made outside Velmir and DELETE are not audited at this stage.
+For a row with a primary key, **History** opens a generic panel with the actor, `Intl`-formatted time, action and values. Russian and English switch without reload; pagination and mobile layouts are supported. `GET /api/resources/{schema}/{resource}/records/{key}/history` requires a session and `read`: no session returns 401, while no read grant returns 403 without a login redirect. Deleted-record history remains available by key without checking that the target record still exists. Changes made outside Velmir are not audited.
 
-The target mutation commits in the target database before audit is written to the admin database; there is no cross-database atomicity. If audit fails after commit, the API returns `AUDIT_WRITE_FAILED` with `mutation_committed=true`, and the frontend explains that the change is already saved and offers a data refresh. There is no automatic POST/PATCH retry or compensating DELETE/UPDATE. See `docs/api_en.md` for the full schema, history contract and limitations.
+The target mutation commits in the target database before audit is written to the admin database; there is no cross-database atomicity. If audit fails after commit, the API returns `AUDIT_WRITE_FAILED` with `mutation_committed=true`, and the frontend explains that the change was applied and refreshes data. DELETE has a distinct warning: the record is already deleted, but its history event may not have been recorded. There is no automatic POST/PATCH/DELETE retry or compensating DELETE/UPDATE/INSERT. See `docs/api_en.md` for the full schema, history contract and limitations.
 
 ## Demo target reset
 
-Initialization scripts run only when Docker creates a new target data volume. This stage adds the demo writer role and a `book_categories.note` column, so an already initialized demo volume must be recreated to apply them.
+Initialization scripts run only when Docker creates a new target data volume. For DELETE on an already initialized local volume, use the one-time GRANT from “Databases and write safety”; recreating the volume is not required.
 
 The following commands destroy **only the local `velmir_demo` target container and its demo volume**. They do not remove the admin database volume. Do not use them for a real database:
 
@@ -168,6 +176,6 @@ Remove-Item Env:TEST_TARGET_DATABASE_URL
 Remove-Item Env:TEST_TARGET_WRITE_DATABASE_URL
 ```
 
-The writer and history integration tests create and update demo records and intentionally leave them in the demo database; records are not deleted. The tests refuse non-local hosts and databases other than `velmir_demo`.
+The writer and history integration tests create, update and delete demo records, including simple/composite PKs, FK errors and audit failure after commit. Some audit-failure fixtures intentionally remain in the demo database. The tests refuse non-local hosts and databases other than `velmir_demo`.
 
 The auth, audit storage and admin/history API integration tests require the migrated local `velmir_admin` database, reject non-local hosts and other database names, and roll back their admin transactions. Do not run them against a real admin database. Tests never alter the target schema.

@@ -44,6 +44,7 @@ type recordLister interface {
 type recordWriter interface {
 	Create(context.Context, string, introspection.Resource, records.RecordValues) (map[string]any, error)
 	Update(context.Context, string, introspection.Resource, string, records.RecordValues) (records.UpdateResult, error)
+	Delete(context.Context, string, introspection.Resource, string) (map[string]any, error)
 }
 
 type recordAudit interface {
@@ -91,6 +92,7 @@ func NewRouter(adminDatabase, targetDatabase databasePinger, inspector schemaIns
 		r.With(requireResourcePermission(authorization.Read)).Get("/api/resources/{schema}/{resource}/records/{key}/history", recordHistory(inspector, auditStore))
 		r.With(requireCSRF, requireResourcePermission(authorization.Create)).Post("/api/resources/{schema}/{resource}/records", createRecord(inspector, writer, auditStore))
 		r.With(requireCSRF, requireResourcePermission(authorization.Update)).Patch("/api/resources/{schema}/{resource}/records/{key}", updateRecord(inspector, writer, auditStore))
+		r.With(requireCSRF, requireResourcePermission(authorization.Delete)).Delete("/api/resources/{schema}/{resource}/records/{key}", deleteRecord(inspector, writer, auditStore))
 		r.Route("/api/admin", func(admin chi.Router) {
 			admin.Use(requireAdmin(permissions))
 			admin.Use(withAdminService(administration))
@@ -156,7 +158,7 @@ func schema(inspector schemaInspector, writeEnabled bool) http.HandlerFunc {
 		}
 		permissions := currentPermissions(r)
 		catalog = filterReadableCatalog(catalog, permissions)
-		catalog.WriteEnabled = writeEnabled && permissions.HasAny(authorization.Create, authorization.Update)
+		catalog.WriteEnabled = writeEnabled && permissions.HasAny(authorization.Create, authorization.Update, authorization.Delete)
 		writeJSON(w, http.StatusOK, catalog)
 	}
 }
@@ -316,11 +318,52 @@ func updateRecord(inspector schemaInspector, writer recordWriter, auditStore rec
 	}
 }
 
+func deleteRecord(inspector schemaInspector, writer recordWriter, auditStore recordAudit) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if inspector == nil {
+			writeTargetNotConfigured(w)
+			return
+		}
+		if writer == nil {
+			writeTargetReadOnly(w)
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), mutationTimeout)
+		defer cancel()
+		resource, ok := mutationResource(ctx, w, r, inspector)
+		if !ok {
+			return
+		}
+		key, err := url.PathUnescape(chi.URLParam(r, "key"))
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, errorResponse{Error: apiError{Code: "INVALID_RECORD_KEY", Message: "Record key is not valid URL-encoded JSON"}})
+			return
+		}
+		schemaName := chi.URLParam(r, "schema")
+		before, err := writer.Delete(ctx, schemaName, resource, key)
+		if err != nil {
+			writeMutationError(w, err)
+			return
+		}
+		if err := recordMutationAudit(ctx, auditStore, currentUser(r).ID, audit.Delete, schemaName, resource, before, nil); err != nil {
+			writeCommittedAuditError(w, r, audit.Delete, schemaName, resource.Name, nil, err)
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
 func recordMutationAudit(ctx context.Context, auditStore recordAudit, actorUserID int64, action audit.Action, schemaName string, resource introspection.Resource, before, after map[string]any) error {
 	if auditStore == nil {
 		return nil
 	}
-	key, err := audit.RecordKey(resource, after)
+	keyRecord := after
+	if action == audit.Delete {
+		keyRecord = before
+	}
+	key, err := audit.RecordKey(resource, keyRecord)
 	if err != nil {
 		return err
 	}
@@ -337,14 +380,21 @@ func recordMutationAudit(ctx context.Context, auditStore recordAudit, actorUserI
 
 func writeCommittedAuditError(w http.ResponseWriter, r *http.Request, action audit.Action, schemaName, resourceName string, record map[string]any, err error) {
 	log.Printf("audit write failed after committed target mutation: action=%s schema=%q resource=%q actor_user_id=%d error_type=%T", action, schemaName, resourceName, currentUser(r).ID, err)
-	writeJSON(w, http.StatusInternalServerError, map[string]any{
+	message := "The target record was saved, but its audit event could not be recorded"
+	if action == audit.Delete {
+		message = "The target record was deleted, but its audit event could not be recorded"
+	}
+	body := map[string]any{
 		"error": apiError{
 			Code:              "AUDIT_WRITE_FAILED",
-			Message:           "The target record was saved, but its audit event could not be recorded",
+			Message:           message,
 			MutationCommitted: true,
 		},
-		"record": record,
-	})
+	}
+	if action != audit.Delete {
+		body["record"] = record
+	}
+	writeJSON(w, http.StatusInternalServerError, body)
 }
 
 func recordHistory(inspector schemaInspector, auditStore recordAudit) http.HandlerFunc {

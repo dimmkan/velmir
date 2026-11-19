@@ -25,7 +25,7 @@ describe('administration form validation', () => {
     expect(validateRoleForm({
       name: 'editor',
       description: 'Editors',
-      permissions: [{ schema: 'public', resource: 'books', operations: ['read', 'update'] }],
+      permissions: [{ schema: 'public', resource: 'books', operations: ['read', 'update', 'delete'] }],
     })).toEqual({})
     expect(validateRoleForm({
       name: 'reader', description: '', permissions: [{ schema: '*', resource: '*', operations: ['read'] }],
@@ -33,7 +33,7 @@ describe('administration form validation', () => {
     for (const permissions of [
       [{ schema: '*', resource: 'books', operations: ['read' as const] }],
       [{ schema: 'public', resource: 'books', operations: [] }],
-      [{ schema: 'public', resource: 'books', operations: ['delete' as never] }],
+      [{ schema: 'public', resource: 'books', operations: ['publish' as never] }],
       [
         { schema: 'public', resource: 'books', operations: ['read' as const] },
         { schema: 'public', resource: 'books', operations: ['update' as const] },

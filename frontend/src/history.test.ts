@@ -19,8 +19,8 @@ function event(action: HistoryEvent['action']): HistoryEvent {
   return {
     id: 'event-1', actor: { id: 1, email: 'admin@example.test', display_name: 'Admin' },
     timestamp: '2025-01-02T03:04:05Z', action, schema: 'public', resource: 'items', record_key: { id: '1' },
-    before: action === 'update' ? { id: '1', amount: '1.00', payload: { big: '9223372036854775807' } } : null,
-    after: { id: '1', amount: '12345678901234567890.0001', payload: { big: '9223372036854775807' } },
+    before: action === 'create' ? null : { id: '1', amount: '1.00', payload: { big: '9223372036854775807' } },
+    after: action === 'delete' ? null : { id: '1', amount: '12345678901234567890.0001', payload: { big: '9223372036854775807' } },
   }
 }
 
@@ -32,6 +32,10 @@ describe('history changes', () => {
     expect(changes[0].before).toBe('1.00')
     expect(changes[0].after).toBe('12345678901234567890.0001')
     expect(typeof changes[0].after).toBe('string')
+    const deleted = historyChanges(event('delete'), resource)
+    expect(deleted.map((change) => change.column.name)).toEqual(['id', 'amount', 'payload'])
+    expect(deleted[1].before).toBe('1.00')
+    expect(deleted[1].after).toBeUndefined()
   })
 })
 

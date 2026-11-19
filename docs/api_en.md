@@ -15,9 +15,9 @@
 }
 ```
 
-Access is denied by default and enforced by the backend independently of the frontend. A user can have multiple roles, whose permissions are unioned. The `admin` system role grants `read`, `create` and `update` on every resource; `viewer` grants only `read`. A resource-level grant consists of a schema, resource and operation; `*` in system roles matches every schema and resource. Unknown roles and missing roles grant no additional access.
+Access is denied by default and enforced by the backend independently of the frontend. A user can have multiple roles, whose permissions are unioned. The `admin` system role grants `read`, `create`, `update` and `delete` on every resource; `viewer` grants only `read`. A resource-level grant consists of a schema, resource and operation; `*` in system roles matches every schema and resource. Unknown roles and missing roles grant no additional access. The `delete` grant is independent: `read`, `create`, `update` and `write_enabled` never imply it.
 
-An authenticated user without the required permission receives HTTP 403 with code `FORBIDDEN`, distinct from HTTP 401 for a missing session and from `CSRF_TOKEN_INVALID`. `GET /api/auth/me` remains available and returns an empty permissions list to a user without a role. Public registration and target-record DELETE endpoints are unavailable. User and role administration is restricted to the `admin` system role.
+An authenticated user without the required permission receives HTTP 403 with code `FORBIDDEN`, distinct from HTTP 401 for a missing session and from `CSRF_TOKEN_INVALID`. `GET /api/auth/me` remains available and returns an empty permissions list to a user without a role. Public registration is unavailable. User and role administration is restricted to the `admin` system role.
 
 ### POST /api/auth/login
 
@@ -45,7 +45,7 @@ A successful response is HTTP 200:
     {
       "schema": "*",
       "resource": "*",
-      "operations": ["read", "create", "update"]
+      "operations": ["read", "create", "update", "delete"]
     }
   ]
 }
@@ -92,7 +92,7 @@ Every endpoint below requires a session cookie and the `admin` system role. Ever
 
 Successful mutations other than creation return HTTP 204. Disabling a user and resetting a password atomically revoke all of that user's sessions. Disabled users receive `INVALID_CREDENTIALS` at login. Self-disable and removing your own `admin` role are forbidden. The last active administrator cannot be disabled or lose admin rights, including by another administrator. System roles `admin` and `viewer` cannot be renamed or have permissions changed; role deletion is not exposed.
 
-Permissions use `{"schema":"public","resource":"books","operations":["read","update"]}`. Only `read`, `create` and `update` are supported; wildcard grants must set both schema and resource to `*`. An empty array removes all permissions from a custom role. Empty names, partial wildcards, duplicates and unknown operations are rejected. Custom role names start with a lowercase ASCII letter and contain at most 100 `a-z`, `0-9`, `_` or `-` characters; descriptions are limited to 500 characters. Email is limited to 254 characters, display name to 200 and password to 12–1024 characters. Every value is sent to PostgreSQL as a query parameter, never interpolated into SQL.
+Permissions use `{"schema":"public","resource":"books","operations":["read","update"]}`. Only `read`, `create`, `update` and `delete` are supported; wildcard grants must set both schema and resource to `*`. An empty array removes all permissions from a custom role. Empty names, partial wildcards, duplicates and unknown operations are rejected. Custom role names start with a lowercase ASCII letter and contain at most 100 `a-z`, `0-9`, `_` or `-` characters; descriptions are limited to 500 characters. Email is limited to 254 characters, display name to 200 and password to 12–1024 characters. Every value is sent to PostgreSQL as a query parameter, never interpolated into SQL.
 
 Role and assignment changes apply to subsequent requests without a backend restart, and multiple roles are unioned. Validation failures use HTTP 400 `INVALID_ADMIN_REQUEST` and optional `field_errors`. Conflicts include `ALREADY_EXISTS`, `LAST_ACTIVE_ADMIN`, `SELF_DISABLE_FORBIDDEN`, `SELF_ADMIN_REMOVAL_FORBIDDEN` and `SYSTEM_ROLE_IMMUTABLE`; missing entities return `USER_NOT_FOUND` or `ROLE_NOT_FOUND`.
 
@@ -144,7 +144,7 @@ Successful response (HTTP 200):
 
 `kind` is `table` or `view`. `default` is `null` when no default exists. `primary_key` marks a key column. `identity` is an empty string, `always` or `by_default`; `generated` marks generated columns. `editable` is true only for supported, non-generated table columns (an `always` identity is not editable). `enum_values` contains allowed labels for enum types and is empty otherwise. Composite primary and foreign keys preserve column order. Empty collections are returned as arrays.
 
-`write_enabled` is true only when the optional target write pool is configured and the current user has at least one `create` or `update` grant. It does not guarantee that every resource or column is writable; frontend controls additionally use effective permissions.
+`write_enabled` is true only when the optional target write pool is configured and the current user has at least one `create`, `update` or `delete` grant. It does not guarantee that every resource or column is writable; frontend controls additionally use effective permissions.
 
 If no target database is configured, the endpoint returns HTTP 503:
 
@@ -305,6 +305,16 @@ For example, `{"id":"42"}` is encoded as `%7B%22id%22%3A%2242%22%7D`. Missing, n
 
 The request and success bodies have the same shape as creation. An empty `values` object is rejected. Updates have **last write wins** semantics: there is no version column, optimistic lock or concurrent-change detection in this iteration.
 
+## DELETE /api/resources/{schema}/{resource}/records/{key}
+
+Deletes one table record and returns HTTP 204 with no body. It requires a session, the independent `delete` permission on the resource and a valid CSRF token. The endpoint uses only `TARGET_WRITE_DATABASE_URL`; without a writer DSN it returns HTTP 403 `TARGET_READ_ONLY`. The read pool is never used for deletion.
+
+`{key}` uses the same URL-encoded JSON format as PATCH and supports simple/composite PKs. Schema, resource and PK are checked against the fresh metadata allowlist. Identifiers are quoted and values are sent only as SQL parameters. Views and tables without a PK return `RESOURCE_READ_ONLY`. No request body is used. Bulk delete and deleting multiple records in one request are not supported.
+
+The backend executes `DELETE … RETURNING` to obtain actual before values from the target database, not the client. A missing record returns 404 `RECORD_NOT_FOUND` without audit. Any failed DELETE, including an FK/constraint error, also creates no audit. Constraint responses contain no SQL, stack traces or server internals.
+
+After the target commit, a `delete` event is written to the admin database with actual `before_data`, `after_data IS NULL`, the actor from the server session and the simple/composite record key. There is no cross-database atomicity. If DELETE committed but audit failed, the response is HTTP 500 `AUDIT_WRITE_FAILED` with `mutation_committed=true`; the record is already deleted. The backend does not retry DELETE or issue a compensating INSERT. The frontend shows a distinct localized warning and refreshes the list without repeating DELETE.
+
 ### Mutation errors
 
 The error envelope is shared with read endpoints. Validation and some constraint errors additionally include `field_errors`, keyed by column name:
@@ -326,11 +336,11 @@ The error envelope is shared with read endpoints. Validation and some constraint
 - HTTP 503: `TARGET_NOT_CONFIGURED`.
 - HTTP 500: `SCHEMA_INTROSPECTION_FAILED`, `RECORD_MUTATION_FAILED`, or `AUDIT_WRITE_FAILED` with `mutation_committed=true` when the target mutation committed but the audit write failed.
 
-Constraint responses use generic messages and do not expose SQL, stack traces or server-internal details. Mutation requests are limited to 1 MiB and have a 10-second backend timeout. Delete endpoints are not implemented.
+Constraint responses use generic messages and do not expose SQL, stack traces or server-internal details. POST/PATCH requests are limited to 1 MiB and have a 10-second backend timeout. DELETE accepts no body and deletes only one record.
 
-After a successful POST or PATCH, the backend writes a `create` or `update` event to `audit_events` **in the admin database**. The actor comes from the server-side session, while the timestamp and UUID are generated by the server. Create stores the actual `after` returned by PostgreSQL `RETURNING`; update stores actual `before` and `after` values. Before UPDATE, the record is locked and read in the same target transaction, so `before` never comes from the client. Simple and composite primary keys are supported.
+After a successful POST, PATCH or DELETE, the backend writes a `create`, `update` or `delete` event to `audit_events` **in the admin database**. The actor comes from the server-side session, while the timestamp and UUID are generated by the server. Create stores the actual `after` returned by PostgreSQL `RETURNING`; update stores actual `before` and `after`; delete stores actual `before` from `DELETE … RETURNING` and `after = null`. Before UPDATE, the record is locked and read in the same target transaction, so `before` never comes from the client. Simple and composite primary keys are supported.
 
-The target mutation and audit live in different databases and **are not one atomic transaction**. The target mutation commits first, then the audit event is created. A failed target mutation creates no event. If the target has committed but the audit write fails, the response is HTTP 500 with a distinct error and the saved record:
+The target mutation and audit live in different databases and **are not one atomic transaction**. The target mutation commits first, then the audit event is created. A failed target mutation creates no event. If the target has committed but the audit write fails, the response is HTTP 500 with a distinct error; POST/PATCH responses include the saved record:
 
 ```json
 {
@@ -343,7 +353,7 @@ The target mutation and audit live in different databases and **are not one atom
 }
 ```
 
-`mutation_committed=true` means the target record was saved and **was not rolled back**. The backend performs no compensating DELETE/UPDATE, two-phase commit or automatic POST/PATCH retry. Clients must not automatically retry the mutation, especially POST; refresh and inspect the record instead. The frontend shows a separate warning and offers a manual list refresh.
+`mutation_committed=true` means the target mutation has committed and **was not rolled back**. The backend performs no compensating DELETE/UPDATE/INSERT, two-phase commit or automatic POST/PATCH/DELETE retry. Clients must not automatically retry the mutation; refresh the list and inspect the state instead. For DELETE, the record is already gone, so the response has no `record`, and the frontend shows a distinct warning about deletion without guaranteed audit.
 
 ## Change history through Velmir
 
@@ -352,17 +362,17 @@ The `audit_events` table exists only in the admin database and contains:
 - `id UUID PRIMARY KEY` — unique ID, default `gen_random_uuid()`;
 - `occurred_at TIMESTAMPTZ` — server time, default `clock_timestamp()`;
 - `actor_user_id BIGINT` — references `users(id)` for the actual authenticated actor;
-- `action TEXT` — only `create` or `update`;
+- `action TEXT` — `create`, `update` or `delete`;
 - `schema_name`, `resource_name` — technical resource identifiers;
 - `record_key JSONB` — an object containing the simple or composite primary key;
-- `before_data JSONB` — `NULL` for create and actual prior state for update;
-- `after_data JSONB` — actual state returned by the target database.
+- `before_data JSONB` — `NULL` for create and actual state for update/delete;
+- `after_data JSONB` — actual state for create/update and `NULL` for delete.
 
-A check constraint requires after for create and before/after for update. Indexes support queries scoped to one resource and key; there is no endpoint for unrestricted reads of the entire table. Goose migrations are transactional and use idempotent DDL. Velmir creates no audit tables, triggers or functions in the target database.
+A check constraint requires after for create, before/after for update and only before for delete. Indexes support queries scoped to one resource and key; there is no endpoint for unrestricted reads of the entire table. Goose migrations are transactional and use idempotent DDL. Velmir creates no audit tables, triggers or functions in the target database.
 
 Fields whose names indicate passwords, session/CSRF tokens, password hashes, secrets or connection strings are omitted from audit, including nested JSON objects. Errors are logged by type only, without connection strings, record values or secrets. Bigint/numeric use the records API strings, bytea uses Base64, and JSON/JSONB is handled as `json.RawMessage`/`json.Number` rather than passing through JavaScript numbers.
 
-History covers only successful changes made through Velmir after this feature was introduced. It **does not guarantee audit of external changes** made directly in the target database. At this stage, DELETE, login/logout, reads and user administration are not audited. Create on a table without a primary key can store an event with an empty key, but record-specific history is unavailable.
+History covers only successful changes made through Velmir after this feature was introduced. It **does not guarantee audit of external changes** made directly in the target database. Login/logout, reads and user administration are not audited. Create on a table without a primary key can store an event with an empty key, but record-specific history is unavailable.
 
 ## GET /api/resources/{schema}/{resource}/records/{key}/history
 
@@ -396,7 +406,7 @@ The response returns at most `limit` events and computes `has_next` by fetching 
 }
 ```
 
-`before` is `null` for create. Record keys and before/after use the same safe JSON representation as the records API: exact bigint/numeric strings, JSON/JSONB without backend number conversion, Base64 bytea, and date/timestamp/UUID strings. Errors: 400 `INVALID_RECORD_KEY`, `INVALID_PAGE`, `INVALID_LIMIT`; 401/403 as above; 404 `RESOURCE_NOT_FOUND`; 500 `SCHEMA_INTROSPECTION_FAILED`, `HISTORY_QUERY_FAILED`; 503 `TARGET_NOT_CONFIGURED` or `AUDIT_UNAVAILABLE`.
+`before` is `null` for create, and `after` is `null` for delete. Deleted-record history remains available when its key is requested again; target-record existence is neither required nor checked. Record keys and before/after use the same safe JSON representation as the records API: exact bigint/numeric strings, JSON/JSONB without backend number conversion, Base64 bytea, and date/timestamp/UUID strings. Errors: 400 `INVALID_RECORD_KEY`, `INVALID_PAGE`, `INVALID_LIMIT`; 401/403 as above; 404 `RESOURCE_NOT_FOUND`; 500 `SCHEMA_INTROSPECTION_FAILED`, `HISTORY_QUERY_FAILED`; 503 `TARGET_NOT_CONFIGURED` or `AUDIT_UNAVAILABLE`.
 
 ## GET /readyz
 

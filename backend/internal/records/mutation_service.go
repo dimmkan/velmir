@@ -37,6 +37,14 @@ func (w *Writer) Create(ctx context.Context, schemaName string, resource introsp
 	return executeMutation(ctx, w.database, query, args, resource, false)
 }
 
+func (w *Writer) Delete(ctx context.Context, schemaName string, resource introspection.Resource, key string) (map[string]any, error) {
+	query, args, err := BuildDeleteQuery(schemaName, resource, key)
+	if err != nil {
+		return nil, err
+	}
+	return executeMutation(ctx, w.database, query, args, resource, true)
+}
+
 func (w *Writer) Update(ctx context.Context, schemaName string, resource introspection.Resource, key string, values RecordValues) (UpdateResult, error) {
 	query, args, err := BuildUpdateQuery(schemaName, resource, key, values)
 	if err != nil {

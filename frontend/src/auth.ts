@@ -7,7 +7,7 @@ export interface AuthUser {
   display_name: string
 }
 
-export type PermissionOperation = 'read' | 'create' | 'update'
+export type PermissionOperation = 'read' | 'create' | 'update' | 'delete'
 
 export interface ResourcePermission {
   schema: string
@@ -218,7 +218,7 @@ function isAuthResponse(value: unknown): value is AuthResponse {
 
 function isResourcePermission(value: unknown): value is ResourcePermission {
   if (!isRecord(value) || typeof value.schema !== 'string' || typeof value.resource !== 'string' || !Array.isArray(value.operations)) return false
-  return value.operations.every((operation) => operation === 'read' || operation === 'create' || operation === 'update')
+  return value.operations.every((operation) => operation === 'read' || operation === 'create' || operation === 'update' || operation === 'delete')
 }
 
 function readErrorCode(value: unknown, fallback: string) {

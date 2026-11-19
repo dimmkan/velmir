@@ -97,6 +97,22 @@ func TestLocalAdminDatabaseAuditStorage(t *testing.T) {
 	if err != nil || len(empty.Events) != 0 || empty.HasNext {
 		t.Fatalf("empty history = %+v, %v", empty, err)
 	}
+
+	deleteKey := json.RawMessage(`{"id":"delete-integration"}`)
+	if err := store.Record(ctx, Input{ActorUserID: actorID, Action: Delete, Schema: "public", Resource: "items", RecordKey: deleteKey, Before: before}); err != nil {
+		t.Fatal(err)
+	}
+	deleted, err := store.History(ctx, "public", "items", deleteKey, 1, 20)
+	if err != nil || len(deleted.Events) != 1 {
+		t.Fatalf("delete history = %+v, %v", deleted, err)
+	}
+	event = deleted.Events[0]
+	if event.Action != Delete || len(event.After) != 0 {
+		t.Errorf("delete action/after = %q / %s", event.Action, event.After)
+	}
+	if !bytes.Contains(event.Before, []byte(`"amount": "1.00"`)) {
+		t.Errorf("delete before = %s", event.Before)
+	}
 }
 
 func localAuditHost(host string) bool {

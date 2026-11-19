@@ -57,6 +57,8 @@ const createAllowed = computed(() => Boolean(selectedResource.value) &&
   can(selectedSchemaName.value, selectedResource.value!.name, 'create'))
 const updateAllowed = computed(() => Boolean(selectedResource.value) &&
   can(selectedSchemaName.value, selectedResource.value!.name, 'update'))
+const deleteAllowed = computed(() => Boolean(selectedResource.value) &&
+  can(selectedSchemaName.value, selectedResource.value!.name, 'delete'))
 
 function resourceKey(schema: string, resource: string) {
   return JSON.stringify([schema, resource])
@@ -338,6 +340,7 @@ onBeforeUnmount(() => window.removeEventListener('popstate', handlePopState))
             :read-allowed="readAllowed"
             :create-allowed="createAllowed"
             :update-allowed="updateAllowed"
+            :delete-allowed="deleteAllowed"
             @dirty-change="formDirty = $event"
           />
         </template>

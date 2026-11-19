@@ -88,6 +88,14 @@ function changes(event: HistoryEvent) {
   return historyChanges(event, props.resource)
 }
 
+function actionLabel(action: HistoryEvent['action']) {
+  return t(action === 'create' ? 'history.created' : action === 'update' ? 'history.updated' : 'history.deleted')
+}
+
+function valuesTitle(action: HistoryEvent['action']) {
+  return t(action === 'create' ? 'history.createdValues' : action === 'update' ? 'history.changedFields' : 'history.deletedValues')
+}
+
 watch(() => [props.schemaName, props.resource.name, props.recordKey], () => {
   page.value = 1
   void loadHistory()
@@ -127,7 +135,7 @@ onBeforeUnmount(() => {
       <article v-for="event in result.events" :key="event.id" class="history-event">
         <header class="history-event-header">
           <span class="history-action" :class="`history-action-${event.action}`">
-            {{ t(event.action === 'create' ? 'history.created' : 'history.updated') }}
+            {{ actionLabel(event.action) }}
           </span>
           <dl class="history-event-meta">
             <div>
@@ -141,7 +149,7 @@ onBeforeUnmount(() => {
           </dl>
         </header>
 
-        <h4>{{ t(event.action === 'create' ? 'history.createdValues' : 'history.changedFields') }}</h4>
+        <h4>{{ valuesTitle(event.action) }}</h4>
         <p v-if="changes(event).length === 0" class="muted">{{ t('history.noVisibleChanges') }}</p>
         <dl v-else class="history-changes">
           <div
@@ -157,6 +165,10 @@ onBeforeUnmount(() => {
             <dd v-if="event.action === 'create'" class="history-value">
               <span class="history-value-label">{{ t('history.after') }}</span>
               <span class="history-value-content" :class="{ 'null-value': change.after === null }">{{ formatRecordValue(change.after, change.column.data_type, locale) }}</span>
+            </dd>
+            <dd v-else-if="event.action === 'delete'" class="history-value">
+              <span class="history-value-label">{{ t('history.before') }}</span>
+              <span class="history-value-content" :class="{ 'null-value': change.before === null }">{{ formatRecordValue(change.before, change.column.data_type, locale) }}</span>
             </dd>
             <dd v-else class="history-before-after">
               <span class="history-value">

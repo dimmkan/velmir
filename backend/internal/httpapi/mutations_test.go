@@ -16,6 +16,7 @@ import (
 type recordWriterFunc struct {
 	create func(context.Context, string, introspection.Resource, records.RecordValues) (map[string]any, error)
 	update func(context.Context, string, introspection.Resource, string, records.RecordValues) (records.UpdateResult, error)
+	delete func(context.Context, string, introspection.Resource, string) (map[string]any, error)
 }
 
 func (fn recordWriterFunc) Create(ctx context.Context, schema string, resource introspection.Resource, values records.RecordValues) (map[string]any, error) {
@@ -26,10 +27,15 @@ func (fn recordWriterFunc) Update(ctx context.Context, schema string, resource i
 	return fn.update(ctx, schema, resource, key, values)
 }
 
+func (fn recordWriterFunc) Delete(ctx context.Context, schema string, resource introspection.Resource, key string) (map[string]any, error) {
+	return fn.delete(ctx, schema, resource, key)
+}
+
 func TestMutationsTargetReadOnly(t *testing.T) {
 	for _, request := range []*http.Request{
 		httptest.NewRequest(http.MethodPost, "/api/resources/public/items/records", strings.NewReader(`{"values":{"name":"x"}}`)),
 		httptest.NewRequest(http.MethodPatch, `/api/resources/public/items/records/%7B%22id%22%3A%221%22%7D`, strings.NewReader(`{"values":{"name":"x"}}`)),
+		httptest.NewRequest(http.MethodDelete, `/api/resources/public/items/records/%7B%22id%22%3A%221%22%7D`, nil),
 	} {
 		response := httptest.NewRecorder()
 		newTestRouterWithWriter(nil, nil, recordsInspector(), nil, nil).ServeHTTP(response, request)

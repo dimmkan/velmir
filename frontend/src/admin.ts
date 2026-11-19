@@ -91,7 +91,7 @@ export function validateRoleForm(form: RoleForm): FormErrors {
     }
     pairs.add(pair)
     if (permission.operations.length === 0 || new Set(permission.operations).size !== permission.operations.length ||
-      permission.operations.some((operation) => !['read', 'create', 'update'].includes(operation))) {
+      permission.operations.some((operation) => !['read', 'create', 'update', 'delete'].includes(operation))) {
       errors.permissions = 'validation.permissionOperations'
       break
     }
@@ -163,4 +163,4 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-export const permissionOperations: PermissionOperation[] = ['read', 'create', 'update']
+export const permissionOperations: PermissionOperation[] = ['read', 'create', 'update', 'delete']
