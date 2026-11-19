@@ -1,4 +1,5 @@
 import { reactive } from 'vue'
+import { errorTranslationKey } from './i18n'
 
 export interface AuthUser {
   id: number
@@ -20,6 +21,7 @@ export interface AuthState {
   status: AuthStatus
   user: AuthUser | null
   permissions: ResourcePermission[]
+  can_admin: boolean
   error: string
   loginPending: boolean
   loginError: string
@@ -31,6 +33,7 @@ interface AuthResponse {
   user: AuthUser
   csrf_token: string
   permissions: ResourcePermission[]
+  can_admin: boolean
 }
 
 export function hasPermission(
@@ -51,6 +54,7 @@ export function createAuthStore(backendBaseURL = '') {
     status: 'loading',
     user: null,
     permissions: [],
+    can_admin: false,
     error: '',
     loginPending: false,
     loginError: '',
@@ -88,9 +92,10 @@ export function createAuthStore(backendBaseURL = '') {
     } catch {
       state.user = null
       state.permissions = []
+      state.can_admin = false
       csrfToken = ''
       state.status = 'error'
-      state.error = 'Could not contact the backend. Check that it is running and try again.'
+      state.error = 'errors.network'
     }
   }
 
@@ -107,19 +112,18 @@ export function createAuthStore(backendBaseURL = '') {
       })
       const body: unknown = await response.json()
       if (!response.ok) {
-        state.loginError = readErrorMessage(body, response.status === 401
-          ? 'Invalid email or password.'
-          : 'Could not sign in. Try again.')
+        const code = readErrorCode(body, response.status === 401 ? 'INVALID_CREDENTIALS' : 'LOGIN_FAILED')
+        state.loginError = errorTranslationKey(code)
         return false
       }
       if (!isAuthResponse(body)) {
-        state.loginError = 'The backend returned an invalid login response.'
+        state.loginError = 'errors.invalidLoginResponse'
         return false
       }
       authenticate(body)
       return true
     } catch {
-      state.loginError = 'Could not contact the backend. Check your connection and try again.'
+      state.loginError = 'errors.network'
       return false
     } finally {
       state.loginPending = false
@@ -139,13 +143,13 @@ export function createAuthStore(backendBaseURL = '') {
       })
       if (!response.ok && response.status !== 401) {
         const body: unknown = await response.json()
-        state.logoutError = readErrorMessage(body, 'Could not sign out. Try again.')
+        state.logoutError = errorTranslationKey(readErrorCode(body, 'LOGOUT_FAILED'), response.status)
         return false
       }
       expire()
       return true
     } catch {
-      state.logoutError = 'Could not contact the backend. You are still signed in.'
+      state.logoutError = 'errors.logoutNetwork'
       return false
     } finally {
       state.logoutPending = false
@@ -159,6 +163,7 @@ export function createAuthStore(backendBaseURL = '') {
       ...permission,
       operations: [...permission.operations],
     }))
+    state.can_admin = body.can_admin
     state.status = 'authenticated'
     state.error = ''
     state.loginError = ''
@@ -169,6 +174,7 @@ export function createAuthStore(backendBaseURL = '') {
     csrfToken = ''
     state.user = null
     state.permissions = []
+    state.can_admin = false
     state.status = 'anonymous'
     state.error = ''
     state.loginError = ''
@@ -204,6 +210,7 @@ function isAuthResponse(value: unknown): value is AuthResponse {
     Number.isSafeInteger(value.user.id) &&
     typeof value.user.email === 'string' &&
     typeof value.user.display_name === 'string' &&
+    typeof value.can_admin === 'boolean' &&
     Array.isArray(value.permissions) &&
     value.permissions.every(isResourcePermission)
   )
@@ -214,9 +221,9 @@ function isResourcePermission(value: unknown): value is ResourcePermission {
   return value.operations.every((operation) => operation === 'read' || operation === 'create' || operation === 'update')
 }
 
-function readErrorMessage(value: unknown, fallback: string) {
-  if (isRecord(value) && isRecord(value.error) && typeof value.error.message === 'string') {
-    return value.error.message
+function readErrorCode(value: unknown, fallback: string) {
+  if (isRecord(value) && isRecord(value.error) && typeof value.error.code === 'string') {
+    return value.error.code
   }
   return fallback
 }

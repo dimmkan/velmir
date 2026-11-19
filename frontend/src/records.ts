@@ -120,15 +120,40 @@ export function filterOperators(dataType: string): FilterOperator[] {
   return ['is_null']
 }
 
-export function formatRecordValue(value: unknown, dataType: string): string {
+export function formatRecordValue(value: unknown, dataType: string, locale = 'ru'): string {
   if (value === null) return 'null'
   if (typeof value === 'boolean') return value ? 'true' : 'false'
   if (typeof value === 'object') return JSON.stringify(value)
   if (typeof value === 'string') {
-    if (baseType(dataType) === 'bytea') return `base64:${value}`
+    const type = baseType(dataType)
+    if (type === 'bytea') return `base64:${value}`
+    if (type === 'date' || type === 'timestamp without time zone' || type === 'timestamp with time zone') {
+      return formatTemporalValue(value, type, locale)
+    }
     return value
   }
   return String(value)
+}
+
+function formatTemporalValue(
+  value: string,
+  dataType: 'date' | 'timestamp without time zone' | 'timestamp with time zone',
+  locale: string,
+): string {
+  const date = new Date(dataType === 'date' ? `${value}T00:00:00Z` : value)
+  if (Number.isNaN(date.getTime())) return value
+  const options: Intl.DateTimeFormatOptions = dataType === 'date'
+    ? { dateStyle: 'medium', timeZone: 'UTC' }
+    : {
+        dateStyle: 'medium',
+        timeStyle: 'medium',
+        ...(dataType === 'timestamp without time zone' ? { timeZone: 'UTC' } : {}),
+      }
+  try {
+    return new Intl.DateTimeFormat(locale, options).format(date)
+  } catch {
+    return value
+  }
 }
 
 export async function fetchRecords(

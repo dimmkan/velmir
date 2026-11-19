@@ -9,10 +9,12 @@ import (
 
 type DBTX interface {
 	Query(context.Context, string, ...any) (pgx.Rows, error)
+	QueryRow(context.Context, string, ...any) pgx.Row
 }
 
 type Provider interface {
 	Permissions(context.Context, int64) (Permissions, error)
+	IsAdmin(context.Context, int64) (bool, error)
 }
 
 type Store struct {
@@ -48,4 +50,18 @@ func (s *Store) Permissions(ctx context.Context, userID int64) (Permissions, err
 		return nil, fmt.Errorf("iterate effective permissions: %w", err)
 	}
 	return EffectivePermissions(grants), nil
+}
+
+func (s *Store) IsAdmin(ctx context.Context, userID int64) (bool, error) {
+	var isAdmin bool
+	if err := s.db.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM user_roles AS ur
+			JOIN roles AS r ON r.id = ur.role_id
+			WHERE ur.user_id = $1 AND r.name = 'admin' AND r.is_system
+		)`, userID).Scan(&isAdmin); err != nil {
+		return false, fmt.Errorf("check administrator role: %w", err)
+	}
+	return isAdmin, nil
 }

@@ -80,8 +80,13 @@ describe('record values', () => {
   it('formats null, booleans, dates, JSON and large numbers without numeric coercion', () => {
     expect(formatRecordValue(null, 'text')).toBe('null')
     expect(formatRecordValue(false, 'boolean')).toBe('false')
-    expect(formatRecordValue('2025-01-02', 'date')).toBe('2025-01-02')
-    expect(formatRecordValue('2025-01-02T03:04:05Z', 'timestamp with time zone')).toBe('2025-01-02T03:04:05Z')
+    expect(formatRecordValue('2025-01-02', 'date', 'en')).toBe(
+      new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeZone: 'UTC' }).format(new Date('2025-01-02T00:00:00Z')),
+    )
+    expect(formatRecordValue('2025-01-02T03:04:05Z', 'timestamp with time zone', 'ru')).toBe(
+      new Intl.DateTimeFormat('ru', { dateStyle: 'medium', timeStyle: 'medium' }).format(new Date('2025-01-02T03:04:05Z')),
+    )
+    expect(formatRecordValue('not-a-date', 'date', 'en')).toBe('not-a-date')
     expect(formatRecordValue({ big: '9223372036854775807', ok: true }, 'jsonb')).toBe('{"big":"9223372036854775807","ok":true}')
     expect(formatRecordValue('9223372036854775807', 'bigint')).toBe('9223372036854775807')
     expect(formatRecordValue('12345678901234567890.0001', 'numeric')).toBe('12345678901234567890.0001')

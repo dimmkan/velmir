@@ -28,10 +28,15 @@ func (s testAuthService) Logout(context.Context, string) error { return nil }
 type testPermissionProvider struct {
 	permissions authorization.Permissions
 	err         error
+	isAdmin     bool
 }
 
 func (s testPermissionProvider) Permissions(context.Context, int64) (authorization.Permissions, error) {
 	return s.permissions, s.err
+}
+
+func (s testPermissionProvider) IsAdmin(context.Context, int64) (bool, error) {
+	return s.isAdmin, s.err
 }
 
 func adminTestPermissions() authorization.Permissions {

@@ -59,7 +59,11 @@ type mutationRequest struct {
 	Values records.RecordValues `json:"values"`
 }
 
-func NewRouter(adminDatabase, targetDatabase databasePinger, inspector schemaInspector, lister recordLister, writer recordWriter, authService authService, permissions permissionProvider, secureCookies bool) http.Handler {
+func NewRouter(adminDatabase, targetDatabase databasePinger, inspector schemaInspector, lister recordLister, writer recordWriter, authService authService, permissions permissionProvider, secureCookies bool, adminServices ...administrationService) http.Handler {
+	var administration administrationService
+	if len(adminServices) > 0 {
+		administration = adminServices[0]
+	}
 	router := chi.NewRouter()
 	router.Get("/healthz", healthz)
 	router.Get("/readyz", readyz(adminDatabase, targetDatabase))
@@ -67,12 +71,27 @@ func NewRouter(adminDatabase, targetDatabase databasePinger, inspector schemaIns
 	router.Group(func(r chi.Router) {
 		r.Use(requireAuth(authService))
 		r.Use(loadPermissions(permissions))
-		r.Get("/api/auth/me", me(secureCookies))
+		r.Get("/api/auth/me", me(permissions, secureCookies))
 		r.With(requireCSRF).Post("/api/auth/logout", logout(authService, secureCookies))
 		r.With(requireAnyPermission(authorization.Read)).Get("/api/schema", schema(inspector, writer != nil))
 		r.With(requireResourcePermission(authorization.Read)).Get("/api/resources/{schema}/{resource}/records", listRecords(inspector, lister))
 		r.With(requireCSRF, requireResourcePermission(authorization.Create)).Post("/api/resources/{schema}/{resource}/records", createRecord(inspector, writer))
 		r.With(requireCSRF, requireResourcePermission(authorization.Update)).Patch("/api/resources/{schema}/{resource}/records/{key}", updateRecord(inspector, writer))
+		r.Route("/api/admin", func(admin chi.Router) {
+			admin.Use(requireAdmin(permissions))
+			admin.Use(withAdminService(administration))
+			admin.Get("/users", adminUsers(administration))
+			admin.With(requireCSRF).Post("/users", createAdminUser(administration))
+			admin.With(requireCSRF).Patch("/users/{userID}/display-name", updateAdminDisplayName(administration))
+			admin.With(requireCSRF).Patch("/users/{userID}/status", setAdminUserStatus(administration))
+			admin.With(requireCSRF).Post("/users/{userID}/password-reset", resetAdminPassword(administration))
+			admin.With(requireCSRF).Put("/users/{userID}/roles/{roleID}", assignAdminRole(administration))
+			admin.With(requireCSRF).Delete("/users/{userID}/roles/{roleID}", removeAdminRole(administration))
+			admin.Get("/roles", adminRoles(administration))
+			admin.With(requireCSRF).Post("/roles", createAdminRole(administration))
+			admin.With(requireCSRF).Patch("/roles/{roleID}", updateAdminRole(administration))
+			admin.With(requireCSRF).Put("/roles/{roleID}/permissions", replaceAdminRolePermissions(administration))
+		})
 	})
 	router.NotFound(func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusNotFound, errorResponse{Error: apiError{Code: "NOT_FOUND", Message: "Endpoint not found"}})

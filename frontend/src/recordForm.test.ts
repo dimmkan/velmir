@@ -121,7 +121,7 @@ describe('record form validation', () => {
     state.tenant_id.value = '1'
     state.title.value = value
     state.state.value = 'draft'
-    expect(validateRecordForm('create', resource, state)).toEqual({ title: 'This field is required' })
+    expect(validateRecordForm('create', resource, state)).toEqual({ title: 'validation.required' })
   })
 
   it('rejects null for required text', () => {
@@ -129,7 +129,7 @@ describe('record form validation', () => {
     state.tenant_id.value = '1'
     state.title.isNull = true
     state.state.value = 'draft'
-    expect(validateRecordForm('create', resource, state)).toEqual({ title: 'This field is required' })
+    expect(validateRecordForm('create', resource, state)).toEqual({ title: 'validation.required' })
   })
 
   it('rejects a missing required value', () => {
@@ -137,7 +137,7 @@ describe('record form validation', () => {
     state.tenant_id.value = '1'
     state.state.value = 'draft'
     delete state.title
-    expect(validateRecordForm('create', resource, state)).toEqual({ title: 'This field is required' })
+    expect(validateRecordForm('create', resource, state)).toEqual({ title: 'validation.required' })
   })
 
   it('accepts valid required text without trimming it', () => {

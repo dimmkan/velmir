@@ -17,7 +17,7 @@
 
 Доступ по умолчанию запрещён и проверяется на backend независимо от frontend. Пользователю можно назначить несколько ролей; их права объединяются. Системная роль `admin` даёт `read`, `create` и `update` для всех ресурсов, а `viewer` — только `read`. Resource-level grant задаётся схемой, ресурсом и операцией; `*` в системных ролях означает все схемы и ресурсы. Неизвестные роли и отсутствие ролей не дают дополнительных прав.
 
-Аутентифицированный пользователь без необходимого права получает HTTP 403 с кодом `FORBIDDEN`; это отличается от HTTP 401 при отсутствии сессии и от `CSRF_TOKEN_INVALID`. `GET /api/auth/me` остаётся доступным и возвращает пустой список permissions пользователю без роли. Регистрация, управление пользователями и ролями через UI и DELETE endpoints недоступны.
+Аутентифицированный пользователь без необходимого права получает HTTP 403 с кодом `FORBIDDEN`; это отличается от HTTP 401 при отсутствии сессии и от `CSRF_TOKEN_INVALID`. `GET /api/auth/me` остаётся доступным и возвращает пустой список permissions пользователю без роли. Публичная регистрация и DELETE target-записей недоступны. Управление пользователями и ролями разрешено только системной роли `admin`.
 
 ### POST /api/auth/login
 
@@ -40,6 +40,7 @@
     "display_name": "Administrator"
   },
   "csrf_token": "a-random-token-returned-by-the-server",
+  "can_admin": true,
   "permissions": [
     {
       "schema": "*",
@@ -56,7 +57,7 @@
 
 ### GET /api/auth/me
 
-Возвращает HTTP 200 с текущим пользователем, CSRF token и effective permissions в том же формате, что и login. Каждый элемент permissions содержит `schema`, `resource` и массив `operations`; повторяющиеся права нескольких ролей уже объединены. Пользователь без роли получает `"permissions": []`. Endpoint продлевает idle expiration сессии. Отсутствующий CSRF cookie заменяется новым. HTTP 401 означает, что сессия отсутствует, отозвана, истекла по idle timeout или по absolute timeout.
+Возвращает HTTP 200 с текущим пользователем, CSRF token и effective permissions в том же формате, что и login. Поле `can_admin` истинно только при назначенной системной роли `admin`; wildcard permissions пользовательской роли не включают администрирование. Каждый элемент permissions содержит `schema`, `resource` и массив `operations`; повторяющиеся права нескольких ролей уже объединены. Пользователь без роли получает `"permissions": []` и `"can_admin": false`. Endpoint продлевает idle expiration сессии. Отсутствующий CSRF cookie заменяется новым. HTTP 401 означает, что сессия отсутствует, отозвана, истекла по idle timeout или по absolute timeout.
 
 ### POST /api/auth/logout
 
@@ -69,7 +70,31 @@
 - Оба cookies получают флаг `Secure` при `SESSION_COOKIE_SECURE=true`; для production с HTTPS этот параметр необходимо включить.
 - Session cookie не имеет постоянного срока действия в браузере. Серверный idle expiration по умолчанию составляет 30 минут, absolute expiration — 24 часа. Они настраиваются через `SESSION_IDLE_TIMEOUT` и `SESSION_ABSOLUTE_TIMEOUT` с использованием синтаксиса длительностей Go.
 
-Для POST/PATCH-запросов к записям и logout передавайте CSRF-значение из login/me в `X-CSRF-Token`. Сервер сравнивает его с `velmir_csrf` за постоянное время. Отсутствующее или несовпадающее значение возвращает HTTP 403 с кодом `CSRF_TOKEN_INVALID`. Login является неаутентифицированной точкой входа и не требует CSRF. Frontend использует same-origin запросы; CORS wildcard с credentials не поддерживается.
+Для всех POST/PATCH/PUT/DELETE-запросов и logout передавайте CSRF-значение из login/me в `X-CSRF-Token`. Сервер сравнивает его с `velmir_csrf` за постоянное время. Отсутствующее или несовпадающее значение возвращает HTTP 403 с кодом `CSRF_TOKEN_INVALID`. Login является неаутентифицированной точкой входа и не требует CSRF. Frontend использует same-origin запросы; CORS wildcard с credentials не поддерживается.
+
+## Администрирование пользователей и ролей
+
+Все endpoints ниже требуют session cookie и системную роль `admin`. Все mutations дополнительно требуют CSRF. Viewer, пользователь без роли и пользовательская роль с `*.*` получают 403 `FORBIDDEN`. Данные читаются и изменяются только в admin database. Ответы не содержат password hashes, session tokens или token hashes.
+
+| Метод | Путь | Назначение и тело |
+|---|---|---|
+| GET | `/api/admin/users` | `{"users": [...]}`; пользователь содержит `id`, `email`, `display_name`, `is_active`, `roles` |
+| POST | `/api/admin/users` | Создать активного пользователя без ролей: `email`, `display_name`, `password`; HTTP 201 |
+| PATCH | `/api/admin/users/{id}/display-name` | `{"display_name":"New name"}` |
+| PATCH | `/api/admin/users/{id}/status` | `{"is_active":false}` или `true` |
+| POST | `/api/admin/users/{id}/password-reset` | `{"password":"new-user-supplied-password"}` |
+| PUT | `/api/admin/users/{id}/roles/{role_id}` | Назначить роль; идемпотентно |
+| DELETE | `/api/admin/users/{id}/roles/{role_id}` | Снять роль; не удаляет target-записи |
+| GET | `/api/admin/roles` | `{"roles": [...]}`; роль содержит `id`, `name`, `description`, `is_system`, `permissions` |
+| POST | `/api/admin/roles` | Создать пользовательскую роль: `name`, `description`, `permissions`; HTTP 201 |
+| PATCH | `/api/admin/roles/{id}` | Изменить `name` и `description` пользовательской роли |
+| PUT | `/api/admin/roles/{id}/permissions` | Полностью заменить permissions: `{"permissions":[...]}` |
+
+Успешные mutations, кроме создания, возвращают HTTP 204. Отключение пользователя и сброс пароля атомарно отзывают все его сессии. Отключённый пользователь получает `INVALID_CREDENTIALS` при входе. Запрещены самоотключение и снятие собственной роли `admin`; последнего активного администратора нельзя отключить или лишить admin-прав даже другим администратором. Системные роли `admin` и `viewer` нельзя переименовать или изменить их permissions; API удаления ролей отсутствует.
+
+Права описываются массивом объектов `{"schema":"public","resource":"books","operations":["read","update"]}`. Поддерживаются только `read`, `create`, `update`; wildcard разрешён только как `"schema":"*","resource":"*"`. Пустой массив снимает все права пользовательской роли. Пустые имена, частичные wildcards, дубликаты и неизвестные операции отклоняются. Имена пользовательских ролей начинаются со строчной латинской буквы и содержат до 100 символов `a-z`, `0-9`, `_`, `-`; описание — до 500 символов. Email — до 254 символов, display name — до 200, пароль — от 12 до 1024 символов. Все значения передаются в PostgreSQL как параметры, а не интерполируются в SQL.
+
+Изменения ролей и назначений применяются к следующим запросам без перезапуска backend. Права нескольких ролей объединяются. Ошибки валидации используют HTTP 400 `INVALID_ADMIN_REQUEST` и при необходимости `field_errors`. Конфликты включают `ALREADY_EXISTS`, `LAST_ACTIVE_ADMIN`, `SELF_DISABLE_FORBIDDEN`, `SELF_ADMIN_REMOVAL_FORBIDDEN` и `SYSTEM_ROLE_IMMUTABLE`; отсутствующие сущности возвращают `USER_NOT_FOUND` или `ROLE_NOT_FOUND`.
 
 ## GET /api/schema
 

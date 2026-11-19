@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 const props = defineProps<{
   pending: boolean
@@ -9,6 +10,7 @@ const emit = defineEmits<{
   submit: [email: string, password: string]
 }>()
 
+const { t } = useI18n()
 const email = ref('')
 const password = ref('')
 
@@ -22,21 +24,21 @@ function submit() {
 <template>
   <main class="login-layout">
     <section class="login-panel" aria-labelledby="login-title">
-      <p class="eyebrow">Velmir administration</p>
-      <h1 id="login-title">Sign in</h1>
-      <p class="login-intro">Use your Velmir administrator account to continue.</p>
-      <div v-if="error" class="login-error" role="alert">{{ error }}</div>
+      <img class="login-logo" src="/brand/velmir-logo-light.svg" alt="Velmir" />
+      <h1 id="login-title">{{ t('auth.signIn') }}</h1>
+      <p class="login-intro">{{ t('auth.intro') }}</p>
+      <div v-if="error" class="login-error" role="alert">{{ t(error) }}</div>
       <form class="login-form" @submit.prevent="submit">
         <label>
-          <span>Email</span>
+          <span>{{ t('auth.email') }}</span>
           <input v-model="email" type="email" name="email" autocomplete="username" required autofocus :disabled="pending" />
         </label>
         <label>
-          <span>Password</span>
+          <span>{{ t('auth.password') }}</span>
           <input v-model="password" type="password" name="password" autocomplete="current-password" required :disabled="pending" />
         </label>
         <button type="submit" class="primary-button" :disabled="pending || !email || !password">
-          {{ pending ? 'Signing in…' : 'Sign in' }}
+          {{ pending ? t('auth.signingIn') : t('auth.signIn') }}
         </button>
       </form>
     </section>

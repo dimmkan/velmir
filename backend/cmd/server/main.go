@@ -64,9 +64,10 @@ func run() error {
 		writer = records.NewWriter(targetWriteDatabase)
 	}
 	permissionStore := authorization.NewStore(adminDatabase)
-	router := httpapi.NewRouter(adminDatabase, nil, nil, nil, writer, authService, permissionStore, cfg.SessionCookieSecure)
+	administration := auth.NewAdministration(adminDatabase)
+	router := httpapi.NewRouter(adminDatabase, nil, nil, nil, writer, authService, permissionStore, cfg.SessionCookieSecure, administration)
 	if targetDatabase != nil {
-		router = httpapi.NewRouter(adminDatabase, targetDatabase, introspection.New(targetDatabase), records.New(targetDatabase), writer, authService, permissionStore, cfg.SessionCookieSecure)
+		router = httpapi.NewRouter(adminDatabase, targetDatabase, introspection.New(targetDatabase), records.New(targetDatabase), writer, authService, permissionStore, cfg.SessionCookieSecure, administration)
 	}
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,

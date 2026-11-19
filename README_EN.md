@@ -2,7 +2,7 @@
 
 [Русская версия](README.md)
 
-Velmir is a metadata-driven PostgreSQL admin panel. The current stage provides schema introspection, universal record lists with pagination, sorting, search and typed filters, automatic forms for creating and editing records, server-side session authentication and RBAC. Deletion, user/role management UI, relations UI and audit are not implemented.
+Velmir is a metadata-driven PostgreSQL admin panel. The current stage provides schema introspection, universal record lists with pagination, sorting, search and typed filters, automatic forms for creating and editing records, server-side session authentication, RBAC and user/role management UI. Record deletion, relations UI and audit are not implemented.
 
 ## Requirements
 
@@ -27,7 +27,7 @@ go run ./cmd/migrate
 go run ./cmd/server
 ```
 
-When the admin database contains no users, server startup creates the first administrator once and logs a reminder without logging the password. **After the administrator is created, remove both bootstrap variables from `.env` and the process environment, then restart the backend.** Subsequent startups do not create another user while any user exists. Startup fails with an actionable error if the database is empty and bootstrap values are missing. Registration and user management UI are intentionally unavailable.
+When the admin database contains no users, server startup creates the first administrator once and logs a reminder without logging the password. **After the administrator is created, remove both bootstrap variables from `.env` and the process environment, then restart the backend.** Subsequent startups do not create another user while any user exists. Startup fails with an actionable error if the database is empty and bootstrap values are missing. Public registration is unavailable; administrators create additional accounts through the UI or CLI.
 
 In a second terminal, start the frontend:
 
@@ -40,7 +40,14 @@ npm run dev
 
 The backend listens on `http://127.0.0.1:8080` by default and remains local-only unless `HTTP_ADDR` is explicitly changed. Open the Vite URL (normally `http://localhost:5173`), not the backend URL. Vite proxies `/api`, `/healthz` and `/readyz` to `VITE_BACKEND_PROXY_TARGET`, so cookies and API requests use the browser's same origin. `VITE_BACKEND_BASE_URL` stays empty.
 
-For production, serve the built frontend and backend API through the same HTTPS origin, with SPA fallback for `/login`; keep `VITE_BACKEND_BASE_URL` empty and set `SESSION_COOKIE_SECURE=true`. No CORS wildcard with credentials is used or required.
+For production, serve the built frontend and backend API through the same HTTPS origin, with SPA fallback for `/login` and `/administration`; keep `VITE_BACKEND_BASE_URL` empty and set `SESSION_COOKIE_SECURE=true`. No CORS wildcard with credentials is used or required.
+
+## Interface design and language
+
+- The corporate palette consists of Velmir Deep `#0F6B5F`, Midnight Bark `#101B20`, Source Mist `#F4F7F5` and Mimir Gold `#C18A3D`. Semantic color tokens, including contrast variants for dark surfaces and error/success/disabled states, are centralized in `frontend/src/style.css`.
+- Source SVG and PNG assets are stored in `frontend/public/brand/`. The full logo appears on the login page, the compact logo in the sidebar, and the mark on narrow screens; light/dark variants match the surface. CSS does not alter the brand mark's shape.
+- SVG/PNG favicons, the Apple touch icon and `site.webmanifest` are linked in `frontend/index.html`. No service worker is used.
+- The interface is available in Russian and English. Russian is the default; the shared footer switch changes the language without a reload and updates `html lang`. The explicit choice is stored only in `localStorage` under `velmir_locale` (`ru` or `en`) and requires no backend API. Namespaced translations live in `frontend/src/locales/`, with English as the fallback for missing strings.
 
 ## Authentication and sessions
 
@@ -52,9 +59,11 @@ Session cookies use `SameSite=Lax`; idle expiration defaults to `30m` and absolu
 
 Access is denied by default. Roles can be combined: a user's effective permissions are the union of every assigned role. The built-in `admin` role allows reading, creating and updating every resource; `viewer` allows reading only. `read`, `create` and `update` grants can target a specific schema and resource. DELETE is unavailable to every role, including `admin`.
 
-The bootstrap administrator receives `admin` automatically. A user created through the CLI receives no role by default and can access only `/api/auth/me` with an empty permissions list; protected resources return 403. The backend filters `/api/schema` by `read`, and the frontend hides unavailable resources and create/update controls. Viewers see an explicit read-only state. User and role management UI is not available yet.
+The bootstrap administrator receives `admin` automatically. A new user receives no role by default and can access only `/api/auth/me` with an empty permissions list; protected resources return 403. The backend filters `/api/schema` by `read`, and the frontend hides unavailable resources and create/update controls. Viewers see an explicit read-only state.
 
-After applying migrations, run these commands from the `backend` directory:
+Administrators have a separate **Administration** section for creating users, changing display names, enabling/disabling accounts, resetting passwords and assigning roles, plus creating and editing custom roles and permissions. The section is hidden from viewers and users without roles, while the backend independently checks the `admin` system role, session and CSRF. Disabling an account and resetting a password revoke all user sessions. Self-disable, removing your own `admin` role and removing admin rights from the last active administrator are forbidden. System roles are immutable; wildcard `*.*` and concrete schema/resource grants support only `read`, `create` and `update`. Changes apply to subsequent requests without a restart. See `docs/api_en.md` for complete API contracts.
+
+The `cmd/users` CLI remains available for local administration and access recovery. After applying migrations, run these commands from the `backend` directory:
 
 ```powershell
 # Create a user; never pass the password as a command-line argument.
@@ -142,9 +151,10 @@ go test -tags=integration ./internal/records -run TestWriterDemoDatabase -v -tim
 
 $env:TEST_ADMIN_DATABASE_URL = "postgresql://velmir:velmir_local_only@localhost:5432/velmir_admin?sslmode=disable"
 go test -tags=integration ./internal/auth -v -timeout 30s
+go test -tags=integration ./internal/httpapi -v -timeout 60s
 Remove-Item Env:TEST_ADMIN_DATABASE_URL
 ```
 
 The writer integration test creates and updates demo records and intentionally leaves them in the demo database; it does not delete records. It refuses to run against a non-local host or a database other than `velmir_demo`.
 
-The auth integration test requires the migrated local `velmir_admin` database, refuses non-local hosts and other database names, and rolls back its transaction. It never connects to a target database. Do not run it against a real admin database.
+The auth and admin API integration tests require the migrated local `velmir_admin` database, refuse non-local hosts and other database names, and roll back their transactions. They never connect to a target database. Do not run them against a real admin database.

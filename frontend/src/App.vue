@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { authState, can, initializeAuth, login, logout } from './auth'
 import LoginPage from './LoginPage.vue'
+import AdministrationPage from './AdministrationPage.vue'
 import RecordsTable from './RecordsTable.vue'
+import AppFooter from './AppFooter.vue'
 import { fetchReadiness, type DatabaseState, type ReadinessResponse } from './readiness'
 import {
   fetchSchema,
@@ -15,8 +18,10 @@ type ViewState = 'loading' | 'ready' | 'error'
 type SchemaViewState = 'loading' | 'ready' | 'empty' | 'not_configured' | 'forbidden' | 'error'
 type RouteState = 'loading' | 'login' | 'application' | 'error'
 
+const { t } = useI18n()
 const backendBaseURL = (import.meta.env.VITE_BACKEND_BASE_URL ?? '').replace(/\/+$/, '')
 const routeState = ref<RouteState>('loading')
+const applicationSection = ref<'resources' | 'administration'>('resources')
 const viewState = ref<ViewState>('loading')
 const readiness = ref<ReadinessResponse | null>(null)
 const schemaViewState = ref<SchemaViewState>('loading')
@@ -27,12 +32,6 @@ let intendedRoute = window.location.pathname === '/login'
   ? '/'
   : `${window.location.pathname}${window.location.search}${window.location.hash}`
 let initialized = false
-
-const databaseStateLabels: Record<DatabaseState, string> = {
-  ready: 'Ready',
-  unavailable: 'Unavailable',
-  not_configured: 'Not configured',
-}
 
 const selectedResource = computed<ResourceMetadata | null>(() => {
   for (const schema of catalog.value?.schemas ?? []) {
@@ -62,8 +61,13 @@ function resourceKey(schema: string, resource: string) {
 }
 
 function databaseStateLabel(state: DatabaseState | undefined) {
-  if (viewState.value === 'loading') return 'Checking'
-  return state ? databaseStateLabels[state] : 'Unknown'
+  if (viewState.value === 'loading') return t('readiness.checking')
+  const keys: Record<DatabaseState, string> = {
+    ready: 'readiness.ready',
+    unavailable: 'readiness.unavailable',
+    not_configured: 'readiness.notConfigured',
+  }
+  return state ? t(keys[state]) : t('common.unknown')
 }
 
 async function loadReadiness() {
@@ -131,9 +135,11 @@ function restoreResourceFromURL() {
 }
 
 function selectResource(schema: string, resource: string, push = true) {
-  if (push && formDirty.value && selectedResourceKey.value !== resourceKey(schema, resource) && !window.confirm('Discard unsaved changes?')) return
+  if (push && formDirty.value && selectedResourceKey.value !== resourceKey(schema, resource) && !window.confirm(t('records.confirmDiscard'))) return
   formDirty.value = false
+  applicationSection.value = 'resources'
   const url = new URL(window.location.href)
+  url.pathname = '/'
   url.searchParams.set('schema', schema)
   url.searchParams.set('resource', resource)
   if (push) {
@@ -143,6 +149,14 @@ function selectResource(schema: string, resource: string, push = true) {
   }
   window.history[push ? 'pushState' : 'replaceState']({}, '', `${url.pathname}${url.search}${url.hash}`)
   selectedResourceKey.value = resourceKey(schema, resource)
+}
+
+function showAdministration() {
+  if (!authState.can_admin) return
+  if (formDirty.value && !window.confirm(t('records.confirmDiscard'))) return
+  formDirty.value = false
+  applicationSection.value = 'administration'
+  window.history.pushState({}, '', '/administration')
 }
 
 function showLogin() {
@@ -155,6 +169,10 @@ function showLogin() {
 
 function showApplication() {
   if (window.location.pathname === '/login') window.history.replaceState({}, '', intendedRoute || '/')
+  applicationSection.value = window.location.pathname === '/administration' && authState.can_admin
+    ? 'administration'
+    : 'resources'
+  if (window.location.pathname === '/administration' && !authState.can_admin) window.history.replaceState({}, '', '/')
   routeState.value = 'application'
   void loadReadiness()
   void loadSchema()
@@ -187,7 +205,10 @@ function handlePopState() {
     return
   }
   routeState.value = 'application'
-  restoreResourceFromURL()
+  applicationSection.value = window.location.pathname === '/administration' && authState.can_admin
+    ? 'administration'
+    : 'resources'
+  if (applicationSection.value === 'resources') restoreResourceFromURL()
 }
 
 watch(() => authState.status, (status) => {
@@ -202,129 +223,138 @@ onBeforeUnmount(() => window.removeEventListener('popstate', handlePopState))
 </script>
 
 <template>
-  <LoginPage v-if="routeState === 'login'" :pending="authState.loginPending" :error="authState.loginError" @submit="submitLogin" />
-  <main v-else-if="routeState === 'loading'" class="auth-state" role="status">
-    <p class="eyebrow">Velmir</p>
-    <h1>Checking your session…</h1>
-  </main>
-  <main v-else-if="routeState === 'error'" class="auth-state" role="alert">
-    <p class="eyebrow">Connection error</p>
-    <h1>Velmir is unavailable</h1>
-    <p>{{ authState.error }}</p>
-    <button type="button" class="primary-button" @click="initialize">Try again</button>
-  </main>
-  <div v-else class="app-layout">
-    <aside class="sidebar">
-      <div class="brand">
-        <p class="eyebrow">PostgreSQL admin panel</p>
-        <h1>Velmir</h1>
-        <p>Metadata-driven database records</p>
-      </div>
+  <div class="route-shell">
+    <LoginPage v-if="routeState === 'login'" :pending="authState.loginPending" :error="authState.loginError" @submit="submitLogin" />
+    <main v-else-if="routeState === 'loading'" class="auth-state" role="status">
+      <p class="eyebrow">Velmir</p>
+      <h1>{{ t('auth.checkingSession') }}</h1>
+    </main>
+    <main v-else-if="routeState === 'error'" class="auth-state" role="alert">
+      <p class="eyebrow">{{ t('auth.connectionError') }}</p>
+      <h1>{{ t('auth.unavailable') }}</h1>
+      <p>{{ t(authState.error) }}</p>
+      <button type="button" class="primary-button" @click="initialize">{{ t('common.retry') }}</button>
+    </main>
+    <div v-else class="app-layout">
+      <aside class="sidebar">
+        <div class="brand">
+          <img class="brand-logo" src="/brand/velmir-logo-compact-dark.svg" alt="Velmir" />
+          <img class="brand-mark" src="/brand/velmir-mark-dark.svg" alt="Velmir" />
+        </div>
 
-      <div class="sidebar-content">
-        <p v-if="schemaViewState === 'loading'" class="sidebar-message">Loading schema…</p>
-        <div v-else-if="schemaViewState === 'not_configured'" class="sidebar-message">
-          Target database is not configured.
-        </div>
-        <div v-else-if="schemaViewState === 'empty'" class="sidebar-message">
-          No tables or views found.
-        </div>
-        <div v-else-if="schemaViewState === 'forbidden'" class="sidebar-message sidebar-error" role="alert">
-          You do not have permission to read any resources.
-        </div>
-        <div v-else-if="schemaViewState === 'error'" class="sidebar-message sidebar-error" role="alert">
-          <p>Could not load the schema.</p>
-          <button type="button" class="secondary-button" @click="loadSchema">Try again</button>
-        </div>
-        <nav v-else aria-label="Database resources">
-          <section v-for="schema in catalog?.schemas" :key="schema.name" class="schema-group">
-            <h2>{{ schema.name }}</h2>
+        <div class="sidebar-content">
+          <nav v-if="authState.can_admin" :aria-label="t('navigation.administration')" class="administration-nav">
             <button
-              v-for="resource in schema.resources"
-              :key="resource.name"
               type="button"
               class="resource-link"
-              :class="{ active: selectedResourceKey === resourceKey(schema.name, resource.name) }"
-              @click="selectResource(schema.name, resource.name)"
-            >
-              <span>{{ resource.name }}</span>
-              <span class="resource-kind">{{ resource.kind }}</span>
-            </button>
-          </section>
-        </nav>
-      </div>
-
-      <section class="account" aria-label="Current user">
-        <strong>{{ authState.user?.display_name }}</strong>
-        <span>{{ authState.user?.email }}</span>
-        <p v-if="authState.logoutError" class="account-error" role="alert">{{ authState.logoutError }}</p>
-        <button type="button" class="logout-button" :disabled="authState.logoutPending" @click="submitLogout">
-          {{ authState.logoutPending ? 'Signing out…' : 'Sign out' }}
-        </button>
-      </section>
-
-      <section class="readiness" aria-label="Infrastructure readiness">
-        <div>
-          <span>Backend</span>
-          <strong :class="`status-${viewState === 'error' ? 'unavailable' : viewState}`">
-            {{ viewState === 'loading' ? 'Checking' : viewState === 'error' ? 'Unavailable' : 'Available' }}
-          </strong>
-        </div>
-        <div>
-          <span>Admin database</span>
-          <strong :class="`status-${readiness?.admin_database ?? viewState}`">
-            {{ databaseStateLabel(readiness?.admin_database) }}
-          </strong>
-        </div>
-        <div>
-          <span>Target database</span>
-          <strong :class="`status-${readiness?.target_database ?? viewState}`">
-            {{ databaseStateLabel(readiness?.target_database) }}
-          </strong>
-        </div>
-        <button v-if="viewState === 'error'" type="button" class="readiness-retry" @click="loadReadiness">
-          Retry readiness
-        </button>
-      </section>
-    </aside>
-
-    <main class="content">
-      <template v-if="selectedResource">
-        <header class="resource-header">
-          <p class="eyebrow">{{ selectedSchemaName }}</p>
-          <div class="resource-title">
-            <h2>{{ selectedResource.name }}</h2>
-            <span class="kind-badge">{{ selectedResource.kind }}</span>
+              :class="{ active: applicationSection === 'administration' }"
+              @click="showAdministration"
+            >{{ t('navigation.administration') }}</button>
+          </nav>
+          <p v-if="schemaViewState === 'loading'" class="sidebar-message">{{ t('records.loadingSchema') }}</p>
+          <div v-else-if="schemaViewState === 'not_configured'" class="sidebar-message">
+            {{ t('records.targetNotConfigured') }}
           </div>
-          <p>Metadata-driven records · {{ catalog?.write_enabled ? 'read and write' : 'read-only' }}</p>
-        </header>
-        <RecordsTable
-          :backend-base-u-r-l="backendBaseURL"
-          :schema-name="selectedSchemaName"
-          :resource="selectedResource"
-          :write-enabled="catalog?.write_enabled ?? false"
-          :create-allowed="createAllowed"
-          :update-allowed="updateAllowed"
-          @dirty-change="formDirty = $event"
-        />
-      </template>
+          <div v-else-if="schemaViewState === 'empty'" class="sidebar-message">
+            {{ t('records.noTables') }}
+          </div>
+          <div v-else-if="schemaViewState === 'forbidden'" class="sidebar-message sidebar-error" role="alert">
+            {{ t('records.noReadPermission') }}
+          </div>
+          <div v-else-if="schemaViewState === 'error'" class="sidebar-message sidebar-error" role="alert">
+            <p>{{ t('records.schemaLoadFailed') }}</p>
+            <button type="button" class="secondary-button" @click="loadSchema">{{ t('common.retry') }}</button>
+          </div>
+          <nav v-else :aria-label="t('navigation.resources')">
+            <section v-for="schema in catalog?.schemas" :key="schema.name" class="schema-group">
+              <h2>{{ schema.name }}</h2>
+              <button
+                v-for="resource in schema.resources"
+                :key="resource.name"
+                type="button"
+                class="resource-link"
+                :class="{ active: selectedResourceKey === resourceKey(schema.name, resource.name) }"
+                @click="selectResource(schema.name, resource.name)"
+              >
+                <span>{{ resource.name }}</span>
+                <span class="resource-kind">{{ resource.kind }}</span>
+              </button>
+            </section>
+          </nav>
+        </div>
 
-      <section v-else class="empty-state" :role="schemaViewState === 'forbidden' ? 'alert' : undefined">
-        <p class="eyebrow">Database records</p>
-        <h2 v-if="schemaViewState === 'loading'">Loading metadata…</h2>
-        <h2 v-else-if="schemaViewState === 'not_configured'">Target database is not configured</h2>
-        <h2 v-else-if="schemaViewState === 'empty'">No resources found</h2>
-        <h2 v-else-if="schemaViewState === 'forbidden'">Forbidden</h2>
-        <h2 v-else-if="schemaViewState === 'error'">Schema unavailable</h2>
-        <h2 v-else>Select a resource</h2>
-        <p v-if="schemaViewState === 'not_configured'">
-          Set TARGET_DATABASE_URL and restart the backend to inspect a database.
-        </p>
-        <p v-else-if="schemaViewState === 'empty'">The target database has no user tables or views.</p>
-        <p v-else-if="schemaViewState === 'forbidden'">Your account has no role granting read access. Contact an administrator.</p>
-        <p v-else-if="schemaViewState === 'error'">Check the backend and target database readiness, then try again.</p>
-        <p v-else-if="schemaViewState === 'ready'">Choose a table or view in the sidebar.</p>
-      </section>
-    </main>
+        <section class="account" :aria-label="t('auth.currentUser')">
+          <strong>{{ authState.user?.display_name }}</strong>
+          <span>{{ authState.user?.email }}</span>
+          <p v-if="authState.logoutError" class="account-error" role="alert">{{ t(authState.logoutError) }}</p>
+          <button type="button" class="logout-button" :disabled="authState.logoutPending" @click="submitLogout">
+            {{ authState.logoutPending ? t('auth.signingOut') : t('auth.signOut') }}
+          </button>
+        </section>
+
+        <section class="readiness" :aria-label="t('readiness.label')">
+          <div>
+            <span>{{ t('readiness.backend') }}</span>
+            <strong :class="`status-${viewState === 'error' ? 'unavailable' : viewState}`">
+              {{ viewState === 'loading' ? t('readiness.checking') : viewState === 'error' ? t('readiness.unavailable') : t('readiness.available') }}
+            </strong>
+          </div>
+          <div>
+            <span>{{ t('readiness.adminDatabase') }}</span>
+            <strong :class="`status-${readiness?.admin_database ?? viewState}`">
+              {{ databaseStateLabel(readiness?.admin_database) }}
+            </strong>
+          </div>
+          <div>
+            <span>{{ t('readiness.targetDatabase') }}</span>
+            <strong :class="`status-${readiness?.target_database ?? viewState}`">
+              {{ databaseStateLabel(readiness?.target_database) }}
+            </strong>
+          </div>
+          <button v-if="viewState === 'error'" type="button" class="readiness-retry" @click="loadReadiness">
+            {{ t('readiness.retry') }}
+          </button>
+        </section>
+      </aside>
+
+      <main class="content">
+        <AdministrationPage v-if="applicationSection === 'administration' && authState.can_admin" :backend-base-u-r-l="backendBaseURL" />
+        <template v-else-if="selectedResource">
+          <header class="resource-header">
+            <p class="eyebrow">{{ selectedSchemaName }}</p>
+            <div class="resource-title">
+              <h2>{{ selectedResource.name }}</h2>
+              <span class="kind-badge">{{ selectedResource.kind }}</span>
+            </div>
+            <p>{{ t('records.metadataDescription', { mode: catalog?.write_enabled ? t('records.readAndWrite') : t('records.readOnly') }) }}</p>
+          </header>
+          <RecordsTable
+            :backend-base-u-r-l="backendBaseURL"
+            :schema-name="selectedSchemaName"
+            :resource="selectedResource"
+            :write-enabled="catalog?.write_enabled ?? false"
+            :create-allowed="createAllowed"
+            :update-allowed="updateAllowed"
+            @dirty-change="formDirty = $event"
+          />
+        </template>
+
+        <section v-else class="empty-state" :role="schemaViewState === 'forbidden' ? 'alert' : undefined">
+          <p class="eyebrow">{{ t('records.databaseRecords') }}</p>
+          <h2 v-if="schemaViewState === 'loading'">{{ t('records.loadingMetadata') }}</h2>
+          <h2 v-else-if="schemaViewState === 'not_configured'">{{ t('records.targetNotConfigured') }}</h2>
+          <h2 v-else-if="schemaViewState === 'empty'">{{ t('records.noResources') }}</h2>
+          <h2 v-else-if="schemaViewState === 'forbidden'">{{ t('errors.forbidden') }}</h2>
+          <h2 v-else-if="schemaViewState === 'error'">{{ t('records.schemaUnavailable') }}</h2>
+          <h2 v-else>{{ t('records.selectResource') }}</h2>
+          <p v-if="schemaViewState === 'not_configured'">{{ t('records.targetNotConfiguredHint') }}</p>
+          <p v-else-if="schemaViewState === 'empty'">{{ t('records.noResourcesHint') }}</p>
+          <p v-else-if="schemaViewState === 'forbidden'">{{ t('records.forbiddenHint') }}</p>
+          <p v-else-if="schemaViewState === 'error'">{{ t('records.schemaErrorHint') }}</p>
+          <p v-else-if="schemaViewState === 'ready'">{{ t('records.selectResourceHint') }}</p>
+        </section>
+      </main>
+    </div>
+    <AppFooter />
   </div>
 </template>

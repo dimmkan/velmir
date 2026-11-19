@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+<title>Velmir</title>
+<rect width="64" height="64" rx="14" fill="#F4F7F5"/>
+<g transform="translate(11 10) scale(0.083984375)" fill="#0F6B5F">
+  <path d="M56,48 H140 L256,344 L372,48 H456 L306,464 H206 Z M232,152 H280 V328 L256,368 L232,328 Z"/>
+  <path d="M256,56 L298,98 L256,140 L214,98 Z" fill="#C18A3D"/>
+</g>
+</svg>

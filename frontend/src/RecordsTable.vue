@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { errorTranslationKey } from './i18n'
 import {
   buildRecordsQuery,
   defaultRecordsQuery,
@@ -29,6 +31,7 @@ const props = defineProps<{
   updateAllowed: boolean
 }>()
 const emit = defineEmits<{ 'dirty-change': [dirty: boolean] }>()
+const { t, locale } = useI18n()
 
 const state = ref<RecordsQueryState>(defaultRecordsQuery())
 const result = ref<RecordsResponse | null>(null)
@@ -138,11 +141,11 @@ async function loadRecords() {
     if (error instanceof RecordsRequestError) {
       errorCode.value = error.code
       errorStatus.value = error.status
-      errorMessage.value = error.message
+      errorMessage.value = errorTranslationKey(error.code, error.status)
     } else if (error instanceof DOMException && error.name === 'AbortError') {
-      errorMessage.value = 'The records request was cancelled or timed out.'
+      errorMessage.value = 'records.requestCancelled'
     } else {
-      errorMessage.value = error instanceof Error ? error.message : 'Could not load records'
+      errorMessage.value = 'errors.generic'
     }
   } finally {
     window.clearTimeout(timeout)
@@ -189,19 +192,14 @@ function removeFilter(index: number) {
   commit({ ...state.value, page: 1, filters: state.value.filters.filter((_, itemIndex) => itemIndex !== index) })
 }
 
+function operatorLabel(operator: FilterOperator, value?: string | boolean) {
+  if (operator === 'is_null') return t(value ? 'records.operators.isNull' : 'records.operators.isNotNull')
+  return t(`records.operators.${operator}`)
+}
+
 function filterLabel(filter: RecordFilter) {
-  const labels: Record<FilterOperator, string> = {
-    eq: '=',
-    neq: '≠',
-    contains: 'contains',
-    lt: '<',
-    lte: '≤',
-    gt: '>',
-    gte: '≥',
-    is_null: filter.value ? 'is null' : 'is not null',
-  }
   const value = filter.operator === 'is_null' ? '' : ` “${String(filter.value)}”`
-  return `${filter.column} ${labels[filter.operator]}${value}`
+  return `${filter.column} ${operatorLabel(filter.operator, filter.value)}${value}`
 }
 
 function changePage(page: number) {
@@ -218,19 +216,13 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section class="records-section" aria-label="Resource records" :aria-busy="loading">
+  <section class="records-section" :aria-label="t('records.sectionLabel')" :aria-busy="loading">
     <div class="record-controls">
-      <button v-if="canCreate" type="button" class="primary-button" @click="openCreateForm">Create record</button>
-      <p v-if="!hasMutationPermission" class="read-only-notice">
-        You have read-only access to this resource. Your roles do not allow creating or editing records.
-      </p>
-      <p v-else-if="!writeEnabled" class="read-only-notice">
-        This target is read-only. Set TARGET_WRITE_DATABASE_URL on the backend to enable creating and editing records.
-      </p>
-      <p v-else-if="resource.kind !== 'table'" class="read-only-notice">Views are read-only.</p>
-      <p v-else-if="resource.primary_key.length === 0" class="read-only-notice">
-        This table has no primary key. Creating records requires create permission; editing is disabled.
-      </p>
+      <button v-if="canCreate" type="button" class="primary-button" @click="openCreateForm">{{ t('records.create') }}</button>
+      <p v-if="!hasMutationPermission" class="read-only-notice">{{ t('records.readOnlyPermission') }}</p>
+      <p v-else-if="!writeEnabled" class="read-only-notice">{{ t('records.readOnlyTarget') }}</p>
+      <p v-else-if="resource.kind !== 'table'" class="read-only-notice">{{ t('records.readOnlyView') }}</p>
+      <p v-else-if="resource.primary_key.length === 0" class="read-only-notice">{{ t('records.noPrimaryKey') }}</p>
     </div>
 
     <RecordForm
@@ -247,93 +239,87 @@ onBeforeUnmount(() => {
 
     <form class="records-toolbar" @submit.prevent="applySearch">
       <label class="search-field">
-        <span>Search</span>
-        <input v-model="searchInput" type="search" placeholder="Literal text" />
+        <span>{{ t('records.search') }}</span>
+        <input v-model="searchInput" type="search" :placeholder="t('records.searchPlaceholder')" />
       </label>
       <label>
-        <span>Search column</span>
+        <span>{{ t('records.searchColumn') }}</span>
         <select v-model="searchColumn" :disabled="searchableColumns.length === 0">
-          <option value="">All text columns</option>
-          <option v-for="column in searchableColumns" :key="column.name" :value="column.name">
-            {{ column.name }}
-          </option>
+          <option value="">{{ t('records.allTextColumns') }}</option>
+          <option v-for="column in searchableColumns" :key="column.name" :value="column.name">{{ column.name }}</option>
         </select>
       </label>
-      <button type="submit" class="primary-button">Search</button>
-      <button v-if="state.search" type="button" class="secondary-button" @click="clearSearch">Clear</button>
+      <button type="submit" class="primary-button">{{ t('records.search') }}</button>
+      <button v-if="state.search" type="button" class="secondary-button" @click="clearSearch">{{ t('common.clear') }}</button>
     </form>
 
     <details class="filters-panel" :open="state.filters.length > 0">
-      <summary>Filters <span v-if="state.filters.length">({{ state.filters.length }})</span></summary>
+      <summary>{{ t('records.filters') }} <span v-if="state.filters.length">({{ state.filters.length }})</span></summary>
       <form class="filter-form" @submit.prevent="addFilter">
         <label>
-          <span>Column</span>
+          <span>{{ t('records.column') }}</span>
           <select v-model="filterColumn" @change="resetFilterOperator">
-            <option v-for="column in resource.columns" :key="column.name" :value="column.name">
-              {{ column.name }} · {{ column.data_type }}
-            </option>
+            <option v-for="column in resource.columns" :key="column.name" :value="column.name">{{ column.name }} · {{ column.data_type }}</option>
           </select>
         </label>
         <label>
-          <span>Operator</span>
+          <span>{{ t('records.operator') }}</span>
           <select v-model="filterOperator">
-            <option v-for="operator in selectedFilterOperators" :key="operator" :value="operator">
-              {{ operator }}
-            </option>
+            <option v-for="operator in selectedFilterOperators" :key="operator" :value="operator">{{ operatorLabel(operator) }}</option>
           </select>
         </label>
         <label v-if="filterOperator === 'is_null'">
-          <span>Value</span>
+          <span>{{ t('records.value') }}</span>
           <select v-model="filterNull">
-            <option value="true">null</option>
-            <option value="false">not null</option>
+            <option value="true">{{ t('records.null') }}</option>
+            <option value="false">{{ t('records.notNull') }}</option>
           </select>
         </label>
         <label v-else-if="selectedFilterColumn?.data_type === 'boolean'">
-          <span>Value</span>
+          <span>{{ t('records.value') }}</span>
           <select v-model="filterBoolean">
             <option value="true">true</option>
             <option value="false">false</option>
           </select>
         </label>
         <label v-else class="filter-value">
-          <span>Value</span>
+          <span>{{ t('records.value') }}</span>
           <input v-model="filterValue" type="text" autocomplete="off" />
         </label>
-        <button type="submit" class="secondary-button" :disabled="!canAddFilter">Add filter</button>
+        <button type="submit" class="secondary-button" :disabled="!canAddFilter">{{ t('records.addFilter') }}</button>
       </form>
-      <div v-if="state.filters.length" class="filter-list" aria-label="Active filters">
+      <div v-if="state.filters.length" class="filter-list" :aria-label="t('records.activeFilters')">
         <span v-for="(filter, index) in state.filters" :key="`${index}-${filter.column}`" class="filter-chip">
           {{ filterLabel(filter) }}
-          <button type="button" :aria-label="`Remove filter ${index + 1}`" @click="removeFilter(index)">×</button>
+          <button type="button" :aria-label="t('records.removeFilter', { number: index + 1 })" @click="removeFilter(index)">×</button>
         </span>
       </div>
     </details>
 
-    <div v-if="loading" class="records-state" role="status">Loading records…</div>
+    <div v-if="loading" class="records-state" role="status">{{ t('records.loading') }}</div>
     <div v-else-if="errorMessage" class="records-state records-error" role="alert">
-      <strong>{{ errorStatus === 403 ? 'Forbidden' : 'Could not load records' }}</strong>
-      <p>{{ errorMessage }}</p>
+      <strong>{{ errorStatus === 403 ? t('errors.forbidden') : t('records.loadFailed') }}</strong>
+      <p>{{ t(errorMessage) }}</p>
       <code v-if="errorCode">{{ errorCode }}</code>
-      <button type="button" class="secondary-button" @click="loadRecords">Try again</button>
+      <button type="button" class="secondary-button" @click="loadRecords">{{ t('common.retry') }}</button>
     </div>
     <div v-else-if="result?.records.length === 0" class="records-state">
-      <strong>No records found</strong>
-      <p>Try another page, search term or filter.</p>
+      <strong>{{ t('records.empty') }}</strong>
+      <p>{{ t('records.emptyHint') }}</p>
     </div>
     <div v-else-if="result" class="table-wrapper records-table-wrapper">
       <table class="records-table">
         <thead>
           <tr>
             <th v-for="column in resource.columns" :key="column.name" :aria-sort="state.sort === column.name ? (state.direction === 'asc' ? 'ascending' : 'descending') : 'none'">
-              <button v-if="isSortableColumn(column)" type="button" class="sort-button" @click="sortBy(column.name)">
+              <button v-if="isSortableColumn(column)" type="button" class="sort-button" :aria-label="t('records.sortBy', { column: column.name })" @click="sortBy(column.name)">
                 {{ column.name }}
                 <span v-if="state.sort === column.name" aria-hidden="true">{{ state.direction === 'asc' ? '↑' : '↓' }}</span>
               </button>
               <span v-else>{{ column.name }}</span>
               <small>{{ column.data_type }}</small>
             </th>
-            <th v-if="canUpdate">Actions</th>
+            <th v-if="canUpdate">{{ t('records.actions') }}</th>
           </tr>
         </thead>
         <tbody>
@@ -342,18 +328,18 @@ onBeforeUnmount(() => {
               v-for="column in resource.columns"
               :key="column.name"
               :class="{ 'null-value': record[column.name] === null, 'json-value': typeof record[column.name] === 'object' && record[column.name] !== null }"
-            >{{ formatRecordValue(record[column.name], column.data_type) }}</td>
+            >{{ formatRecordValue(record[column.name], column.data_type, locale) }}</td>
             <td v-if="canUpdate" class="record-action-cell">
-              <button type="button" class="secondary-button" @click="openEditForm(record)">Edit</button>
+              <button type="button" class="secondary-button" @click="openEditForm(record)">{{ t('common.edit') }}</button>
             </td>
           </tr>
         </tbody>
       </table>
     </div>
 
-    <footer class="pagination" aria-label="Records pagination">
+    <footer class="pagination" :aria-label="t('records.pagination')">
       <label>
-        Rows per page
+        {{ t('records.rowsPerPage') }}
         <select :value="state.limit" @change="commit({ ...state, page: 1, limit: Number(($event.target as HTMLSelectElement).value) })">
           <option :value="10">10</option>
           <option :value="25">25</option>
@@ -361,10 +347,10 @@ onBeforeUnmount(() => {
           <option :value="100">100</option>
         </select>
       </label>
-      <span>Page {{ state.page }}</span>
+      <span>{{ t('records.page', { page: state.page }) }}</span>
       <div>
-        <button type="button" class="secondary-button" :disabled="state.page <= 1 || loading" @click="changePage(state.page - 1)">Previous</button>
-        <button type="button" class="secondary-button" :disabled="!result?.has_next || loading" @click="changePage(state.page + 1)">Next</button>
+        <button type="button" class="secondary-button" :disabled="state.page <= 1 || loading" @click="changePage(state.page - 1)">{{ t('records.previous') }}</button>
+        <button type="button" class="secondary-button" :disabled="!result?.has_next || loading" @click="changePage(state.page + 1)">{{ t('records.next') }}</button>
       </div>
     </footer>
   </section>

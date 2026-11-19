@@ -62,7 +62,7 @@ describe('reactive create form regression', () => {
       await createRecord('', 'public', 'authors', buildCreatePayload(authors, state))
     }
 
-    expect(errors).toEqual({ name: 'This field is required' })
+    expect(errors).toEqual({ name: 'validation.required' })
     expect(fetchMock).toHaveBeenCalledTimes(0)
     expect(state.name.value).toBe('   ')
   })

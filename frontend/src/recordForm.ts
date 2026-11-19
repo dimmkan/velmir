@@ -70,17 +70,17 @@ export function validateRecordForm(
     if (!column.editable || (mode === 'edit' && column.primary_key)) continue
     const field = state[column.name]
     if (!field) {
-      if (!column.nullable) errors[column.name] = 'This field is required'
+      if (!column.nullable) errors[column.name] = 'validation.required'
       continue
     }
     if (field.useDefault) continue
     if (field.isNull) {
-      if (!column.nullable) errors[column.name] = isTextColumn(column) ? 'This field is required' : 'This field cannot be null'
+      if (!column.nullable) errors[column.name] = isTextColumn(column) ? 'validation.required' : 'validation.notNull'
       continue
     }
     const value = field.value
     if (!column.nullable && (value === '' || isTextColumn(column) && value.trim() === '')) {
-      errors[column.name] = 'This field is required'
+      errors[column.name] = 'validation.required'
       continue
     }
     if (value === '') continue
@@ -129,9 +129,9 @@ function typeDefault(column: ColumnMetadata): string {
 
 function validateType(column: ColumnMetadata, value: string): string {
   const type = baseType(column.data_type)
-  if (column.enum_values.length > 0 && !column.enum_values.includes(value)) return 'Choose an allowed value'
+  if (column.enum_values.length > 0 && !column.enum_values.includes(value)) return 'validation.allowedValue'
   if (['smallint', 'integer', 'bigint'].includes(type)) {
-    if (!/^[+-]?\d+$/.test(value)) return 'Expected an integer'
+    if (!/^[+-]?\d+$/.test(value)) return 'validation.integer'
     const parsed = BigInt(value)
     const limits: Record<string, [bigint, bigint]> = {
       smallint: [-32768n, 32767n],
@@ -139,19 +139,19 @@ function validateType(column: ColumnMetadata, value: string): string {
       bigint: [-9223372036854775808n, 9223372036854775807n],
     }
     const [minimum, maximum] = limits[type]
-    if (parsed < minimum || parsed > maximum) return 'Integer is outside the PostgreSQL type range'
+    if (parsed < minimum || parsed > maximum) return 'validation.integerRange'
   }
-  if (['real', 'double precision'].includes(type) && (value.trim() === '' || !Number.isFinite(Number(value)))) return 'Expected a finite number'
-  if (['numeric', 'decimal'].includes(type) && !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(value)) return 'Expected a decimal number'
-  if (type === 'date' && !validDate(value)) return 'Expected a date in YYYY-MM-DD format'
-  if (type === 'timestamp without time zone' && !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?$/.test(value)) return 'Expected YYYY-MM-DDTHH:MM:SS with optional fractional seconds'
-  if (type === 'timestamp with time zone' && Number.isNaN(Date.parse(value))) return 'Expected an RFC 3339 timestamp'
-  if (type === 'uuid' && !/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(value)) return 'Expected a canonical UUID'
+  if (['real', 'double precision'].includes(type) && (value.trim() === '' || !Number.isFinite(Number(value)))) return 'validation.finiteNumber'
+  if (['numeric', 'decimal'].includes(type) && !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(value)) return 'validation.decimal'
+  if (type === 'date' && !validDate(value)) return 'validation.date'
+  if (type === 'timestamp without time zone' && !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?$/.test(value)) return 'validation.timestamp'
+  if (type === 'timestamp with time zone' && Number.isNaN(Date.parse(value))) return 'validation.timestampTz'
+  if (type === 'uuid' && !/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(value)) return 'validation.uuid'
   if (['json', 'jsonb'].includes(type)) {
     try {
       JSON.parse(value)
     } catch {
-      return 'Expected valid JSON'
+      return 'validation.json'
     }
   }
   return ''

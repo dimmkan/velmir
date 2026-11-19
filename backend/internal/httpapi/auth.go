@@ -41,6 +41,7 @@ type authResponse struct {
 	User        userResponse              `json:"user"`
 	CSRFToken   string                    `json:"csrf_token"`
 	Permissions authorization.Permissions `json:"permissions"`
+	CanAdmin    bool                      `json:"can_admin"`
 }
 
 type loginRequest struct {
@@ -98,6 +99,12 @@ func login(service authService, provider permissionProvider, secureCookies bool)
 			writeAuthorizationCheckFailed(w)
 			return
 		}
+		canAdmin, err := canAdminister(ctx, provider, result.User.ID)
+		if err != nil {
+			_ = service.Logout(ctx, result.Token)
+			writeAuthorizationCheckFailed(w)
+			return
+		}
 		csrfToken, err := newCSRFCookie(w, secureCookies)
 		if err != nil {
 			_ = service.Logout(ctx, result.Token)
@@ -105,18 +112,25 @@ func login(service authService, provider permissionProvider, secureCookies bool)
 			return
 		}
 		setSessionCookie(w, result.Token, secureCookies)
-		writeJSON(w, http.StatusOK, makeAuthResponse(result.User, csrfToken, permissions))
+		writeJSON(w, http.StatusOK, makeAuthResponse(result.User, csrfToken, permissions, canAdmin))
 	}
 }
 
-func me(secureCookies bool) http.HandlerFunc {
+func me(provider permissionProvider, secureCookies bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), authorizationTimeout)
+		defer cancel()
+		canAdmin, err := canAdminister(ctx, provider, currentUser(r).ID)
+		if err != nil {
+			writeAuthorizationCheckFailed(w)
+			return
+		}
 		csrfToken, err := ensureCSRFCookie(w, r, secureCookies)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, errorResponse{Error: apiError{Code: "CSRF_GENERATION_FAILED", Message: "Could not initialize the session"}})
 			return
 		}
-		writeJSON(w, http.StatusOK, makeAuthResponse(currentUser(r), csrfToken, currentPermissions(r)))
+		writeJSON(w, http.StatusOK, makeAuthResponse(currentUser(r), csrfToken, currentPermissions(r), canAdmin))
 	}
 }
 
@@ -176,7 +190,7 @@ func requireCSRF(next http.Handler) http.Handler {
 	})
 }
 
-func makeAuthResponse(user auth.User, csrfToken string, permissions authorization.Permissions) authResponse {
+func makeAuthResponse(user auth.User, csrfToken string, permissions authorization.Permissions, canAdmin bool) authResponse {
 	if permissions == nil {
 		permissions = make(authorization.Permissions, 0)
 	}
@@ -184,6 +198,7 @@ func makeAuthResponse(user auth.User, csrfToken string, permissions authorizatio
 		User:        userResponse{ID: user.ID, Email: user.Email, DisplayName: user.DisplayName},
 		CSRFToken:   csrfToken,
 		Permissions: permissions,
+		CanAdmin:    canAdmin,
 	}
 }
 

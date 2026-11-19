@@ -16,6 +16,37 @@ type permissionProvider interface {
 	Permissions(context.Context, int64) (authorization.Permissions, error)
 }
 
+type adminRoleProvider interface {
+	IsAdmin(context.Context, int64) (bool, error)
+}
+
+func canAdminister(ctx context.Context, provider permissionProvider, userID int64) (bool, error) {
+	roles, ok := provider.(adminRoleProvider)
+	if !ok {
+		return false, nil
+	}
+	return roles.IsAdmin(ctx, userID)
+}
+
+func requireAdmin(provider permissionProvider) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctx, cancel := context.WithTimeout(r.Context(), authorizationTimeout)
+			defer cancel()
+			isAdmin, err := canAdminister(ctx, provider, currentUser(r).ID)
+			if err != nil {
+				writeAuthorizationCheckFailed(w)
+				return
+			}
+			if !isAdmin {
+				writeForbidden(w)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 type permissionsContextKey struct{}
 
 func loadPermissions(provider permissionProvider) func(http.Handler) http.Handler {

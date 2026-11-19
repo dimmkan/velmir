@@ -1,0 +1,9 @@
+-- +goose Up
+ALTER TABLE roles ADD COLUMN IF NOT EXISTS is_system BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE roles ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+
+UPDATE roles SET is_system = TRUE WHERE name IN ('admin', 'viewer');
+
+-- +goose Down
+ALTER TABLE roles DROP COLUMN IF EXISTS updated_at;
+ALTER TABLE roles DROP COLUMN IF EXISTS is_system;

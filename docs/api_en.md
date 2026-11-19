@@ -17,7 +17,7 @@
 
 Access is denied by default and enforced by the backend independently of the frontend. A user can have multiple roles, whose permissions are unioned. The `admin` system role grants `read`, `create` and `update` on every resource; `viewer` grants only `read`. A resource-level grant consists of a schema, resource and operation; `*` in system roles matches every schema and resource. Unknown roles and missing roles grant no additional access.
 
-An authenticated user without the required permission receives HTTP 403 with code `FORBIDDEN`, distinct from HTTP 401 for a missing session and from `CSRF_TOKEN_INVALID`. `GET /api/auth/me` remains available and returns an empty permissions list to a user without a role. Registration, user/role management UI and DELETE endpoints are unavailable.
+An authenticated user without the required permission receives HTTP 403 with code `FORBIDDEN`, distinct from HTTP 401 for a missing session and from `CSRF_TOKEN_INVALID`. `GET /api/auth/me` remains available and returns an empty permissions list to a user without a role. Public registration and target-record DELETE endpoints are unavailable. User and role administration is restricted to the `admin` system role.
 
 ### POST /api/auth/login
 
@@ -40,6 +40,7 @@ A successful response is HTTP 200:
     "display_name": "Administrator"
   },
   "csrf_token": "a-random-token-returned-by-the-server",
+  "can_admin": true,
   "permissions": [
     {
       "schema": "*",
@@ -56,7 +57,7 @@ Unknown email addresses, incorrect passwords and inactive accounts return the sa
 
 ### GET /api/auth/me
 
-Returns HTTP 200 with the current user, CSRF token and effective permissions in the same shape as login. Each permissions entry contains `schema`, `resource` and an `operations` array; duplicate grants from multiple roles are already merged. A user without a role receives `"permissions": []`. The endpoint refreshes idle session expiration. A missing CSRF cookie is replaced. HTTP 401 means the session is missing, revoked, idle-expired or absolute-expired.
+Returns HTTP 200 with the current user, CSRF token and effective permissions in the same shape as login. `can_admin` is true only for the assigned `admin` system role; wildcard permissions on a custom role do not enable administration. Each permissions entry contains `schema`, `resource` and an `operations` array; duplicate grants from multiple roles are already merged. A user without a role receives `"permissions": []` and `"can_admin": false`. The endpoint refreshes idle session expiration. A missing CSRF cookie is replaced. HTTP 401 means the session is missing, revoked, idle-expired or absolute-expired.
 
 ### POST /api/auth/logout
 
@@ -69,7 +70,31 @@ Requires the session cookie and a valid CSRF header. It revokes only the current
 - Both cookies have `Secure` enabled when `SESSION_COOKIE_SECURE=true`; this must be enabled for HTTPS production deployments.
 - The session cookie has no persistent browser expiry. Server-side idle expiration defaults to 30 minutes and absolute expiration to 24 hours. Configure them with `SESSION_IDLE_TIMEOUT` and `SESSION_ABSOLUTE_TIMEOUT` using Go duration syntax.
 
-For record POST/PATCH requests and logout, send the login/me CSRF value in `X-CSRF-Token`. The server compares it with `velmir_csrf` using a constant-time comparison. A missing or mismatched value returns HTTP 403 with code `CSRF_TOKEN_INVALID`. Login is the unauthenticated entry point and does not require CSRF. The frontend uses same-origin requests; CORS wildcard access with credentials is not supported.
+For every POST/PATCH/PUT/DELETE request and logout, send the login/me CSRF value in `X-CSRF-Token`. The server compares it with `velmir_csrf` using a constant-time comparison. A missing or mismatched value returns HTTP 403 with code `CSRF_TOKEN_INVALID`. Login is the unauthenticated entry point and does not require CSRF. The frontend uses same-origin requests; CORS wildcard access with credentials is not supported.
+
+## User and role administration
+
+Every endpoint below requires a session cookie and the `admin` system role. Every mutation also requires CSRF. Viewers, users without roles and custom roles with `*.*` receive 403 `FORBIDDEN`. Only the admin database is read or changed. Responses never expose password hashes, session tokens or token hashes.
+
+| Method | Path | Purpose and body |
+|---|---|---|
+| GET | `/api/admin/users` | `{"users": [...]}`; each user has `id`, `email`, `display_name`, `is_active`, `roles` |
+| POST | `/api/admin/users` | Create an active user without roles from `email`, `display_name`, `password`; HTTP 201 |
+| PATCH | `/api/admin/users/{id}/display-name` | `{"display_name":"New name"}` |
+| PATCH | `/api/admin/users/{id}/status` | `{"is_active":false}` or `true` |
+| POST | `/api/admin/users/{id}/password-reset` | `{"password":"new-user-supplied-password"}` |
+| PUT | `/api/admin/users/{id}/roles/{role_id}` | Assign a role; idempotent |
+| DELETE | `/api/admin/users/{id}/roles/{role_id}` | Remove a role assignment; does not delete target records |
+| GET | `/api/admin/roles` | `{"roles": [...]}`; each role has `id`, `name`, `description`, `is_system`, `permissions` |
+| POST | `/api/admin/roles` | Create a custom role from `name`, `description`, `permissions`; HTTP 201 |
+| PATCH | `/api/admin/roles/{id}` | Change a custom role's `name` and `description` |
+| PUT | `/api/admin/roles/{id}/permissions` | Replace permissions with `{"permissions":[...]}` |
+
+Successful mutations other than creation return HTTP 204. Disabling a user and resetting a password atomically revoke all of that user's sessions. Disabled users receive `INVALID_CREDENTIALS` at login. Self-disable and removing your own `admin` role are forbidden. The last active administrator cannot be disabled or lose admin rights, including by another administrator. System roles `admin` and `viewer` cannot be renamed or have permissions changed; role deletion is not exposed.
+
+Permissions use `{"schema":"public","resource":"books","operations":["read","update"]}`. Only `read`, `create` and `update` are supported; wildcard grants must set both schema and resource to `*`. An empty array removes all permissions from a custom role. Empty names, partial wildcards, duplicates and unknown operations are rejected. Custom role names start with a lowercase ASCII letter and contain at most 100 `a-z`, `0-9`, `_` or `-` characters; descriptions are limited to 500 characters. Email is limited to 254 characters, display name to 200 and password to 12–1024 characters. Every value is sent to PostgreSQL as a query parameter, never interpolated into SQL.
+
+Role and assignment changes apply to subsequent requests without a backend restart, and multiple roles are unioned. Validation failures use HTTP 400 `INVALID_ADMIN_REQUEST` and optional `field_errors`. Conflicts include `ALREADY_EXISTS`, `LAST_ACTIVE_ADMIN`, `SELF_DISABLE_FORBIDDEN`, `SELF_ADMIN_REMOVAL_FORBIDDEN` and `SYSTEM_ROLE_IMMUTABLE`; missing entities return `USER_NOT_FOUND` or `ROLE_NOT_FOUND`.
 
 ## GET /api/schema
 

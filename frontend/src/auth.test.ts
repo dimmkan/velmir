@@ -5,8 +5,8 @@ const user: AuthUser = { id: 1, email: 'admin@example.test', display_name: 'Admi
 const csrfToken = 'csrf-token-in-memory-only'
 const adminPermissions: ResourcePermission[] = [{ schema: '*', resource: '*', operations: ['read', 'create', 'update'] }]
 
-function authResponse(status = 200, permissions = adminPermissions) {
-  return new Response(JSON.stringify({ user, csrf_token: csrfToken, permissions }), {
+function authResponse(status = 200, permissions = adminPermissions, canAdmin = true) {
+  return new Response(JSON.stringify({ user, csrf_token: csrfToken, permissions, can_admin: canAdmin }), {
     status,
     headers: { 'Content-Type': 'application/json' },
   })
@@ -54,7 +54,7 @@ describe('auth state', () => {
     await store.initialize()
 
     expect(store.state.status).toBe('error')
-    expect(store.state.error).toContain('Could not contact')
+    expect(store.state.error).toBe('errors.network')
   })
 
   it('logs in without persisting the password and keeps CSRF in memory', async () => {
@@ -82,7 +82,7 @@ describe('auth state', () => {
     await expect(store.login('unknown@example.test', 'wrong')).resolves.toBe(false)
 
     expect(store.state.status).toBe('loading')
-    expect(store.state.loginError).toBe('Invalid email or password')
+    expect(store.state.loginError).toBe('errors.codes.INVALID_CREDENTIALS')
     expect(store.getCSRFToken()).toBe('')
   })
 

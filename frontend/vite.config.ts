@@ -7,7 +7,7 @@ export default defineConfig(({ mode }) => {
   const proxy = { target: backendTarget, changeOrigin: false }
 
   return {
-    plugins: [vue()],
+    plugins: [vue({ template: { transformAssetUrls: false } })],
     server: {
       proxy: {
         '/api': proxy,

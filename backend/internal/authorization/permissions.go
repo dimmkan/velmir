@@ -1,6 +1,10 @@
 package authorization
 
-import "sort"
+import (
+	"errors"
+	"sort"
+	"strings"
+)
 
 type Operation string
 
@@ -96,6 +100,42 @@ func (permissions Permissions) HasAny(operations ...Operation) bool {
 
 func matches(pattern, value string) bool {
 	return pattern == "*" || pattern == value
+}
+
+func ValidatePermissions(permissions Permissions) error {
+	if len(permissions) > 1000 {
+		return errors.New("a role cannot contain more than 1000 permission entries")
+	}
+	pairs := make(map[[2]string]struct{}, len(permissions))
+	for _, permission := range permissions {
+		schemaName := strings.TrimSpace(permission.Schema)
+		resourceName := strings.TrimSpace(permission.Resource)
+		if schemaName == "" || resourceName == "" || len(schemaName) > 255 || len(resourceName) > 255 {
+			return errors.New("each permission requires a schema and resource of at most 255 characters")
+		}
+		if (schemaName == "*" || resourceName == "*") && (schemaName != "*" || resourceName != "*") {
+			return errors.New("wildcard permissions must use * for both schema and resource")
+		}
+		key := [2]string{schemaName, resourceName}
+		if _, exists := pairs[key]; exists {
+			return errors.New("duplicate schema and resource permission entries are not allowed")
+		}
+		pairs[key] = struct{}{}
+		if len(permission.Operations) == 0 {
+			return errors.New("each permission requires at least one operation")
+		}
+		seen := make(map[Operation]struct{}, len(permission.Operations))
+		for _, operation := range permission.Operations {
+			if !validOperation(operation) {
+				return errors.New("permissions support only read, create and update operations")
+			}
+			if _, exists := seen[operation]; exists {
+				return errors.New("duplicate operations are not allowed")
+			}
+			seen[operation] = struct{}{}
+		}
+	}
+	return nil
 }
 
 func validOperation(operation Operation) bool {
