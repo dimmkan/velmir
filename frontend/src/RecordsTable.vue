@@ -392,6 +392,7 @@ onBeforeUnmount(() => {
       :mode="formMode"
       :record="activeRecord"
       :update-allowed="canUpdate"
+      :write-enabled="writeEnabled"
       @saved="recordSaved"
       @audit-failed="recordAuditFailed"
       @cancel="closeForm"

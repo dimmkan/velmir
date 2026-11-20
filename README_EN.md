@@ -2,7 +2,7 @@
 
 [Русская версия](README.md)
 
-Velmir is a metadata-driven PostgreSQL admin panel. The current stage provides schema introspection, universal record lists with pagination, sorting, search and typed filters, related labels, automatic forms with many-to-one relation selectors and read-only one-to-many panels, confirmed record deletion, change history for changes made through Velmir, server-side session authentication, RBAC and user/role management UI. A many-to-many editor, nested mutations, files and automation are not implemented.
+Velmir is a metadata-driven PostgreSQL admin panel. The current stage provides schema introspection, universal record lists with pagination, sorting, search and typed filters, related labels, automatic forms with many-to-one relation selectors, read-only one-to-many panels and a basic many-to-many editor through junction tables, confirmed record deletion, change history for changes made through Velmir, server-side session authentication, RBAC and user/role management UI. Nested mutations, files and automation are not implemented.
 
 ## Requirements
 
@@ -122,7 +122,15 @@ Many-to-one FKs in record lists use the shared label helper: `display_name`, `na
 
 `/api/schema` also returns RBAC-filtered `reverse_relations` with the constraint name, child schema/resource and ordered local/referenced columns. Parent forms/details use them for generic read-only child panels with typed filters for every simple/composite key part, independent pagination and isolated loading/empty/401/403/error states. Details require only `read` and have no save controls; reverse relations whose types lack an existing `eq` records filter are currently hidden without a query. An unsaved parent shows **Save the record first** and runs no child query. Panels have no create/edit/delete controls and preserve parent values and pagination when the language changes.
 
-Backend and frontend independently enforce permissions: read only on the parent hides labels/panels; read on parent and child enables them; read only on the referenced resource does not enable resolve for an inaccessible current resource. No session returns 401, while an authenticated user without permission receives 403 without a login redirect. See `docs/api_en.md` for the full batch contract, reverse metadata and permission matrix. A many-to-many editor, creating child records from a parent form and nested mutations are not implemented.
+Backend and frontend independently enforce permissions: read only on the parent hides labels/panels; read on parent and child enables them; read only on the referenced resource does not enable resolve for an inaccessible current resource. No session returns 401, while an authenticated user without permission receives 403 without a login redirect. See `docs/api_en.md` for the full batch contract, reverse metadata and permission matrix. Creating child records from a parent form and nested mutations are not implemented.
+
+### Many-to-many editor through junction tables
+
+Parent forms/details generically show target records through a supported PostgreSQL junction table. Detection uses only RBAC-filtered `/api/schema`: exactly two many-to-one FKs to distinct resources and a composite PK consisting exactly of both FKs' columns are required; additional fields must be nullable or have default/generated/identity values. Self-referential relations, surrogate PKs, three or more FKs and required additional junction attributes without default/generated values are unsupported and remain ordinary resources/reverse panels.
+
+The panel requires `read` on parent, target and junction. It loads records through the existing records list with typed parent filters and pagination, and labels through one batch relations/resolve per page. **Add relation** requires a writer, `create` on junction and `read` on target, and uses a server-side-search selector plus ordinary flat junction POST. **Remove relation** requires a writer and `delete` on junction, and uses DELETE with the full composite junction PK. Its confirmation explicitly states that only the junction record is deleted while parent/target records remain unchanged; it is distinct from ordinary **Delete record**. Parent/target `update` grants are not required.
+
+Creating and removing a relation produces ordinary audit `create`/`delete` events only for the junction resource. Duplicate/failed mutations are not audited. After committed `AUDIT_WRITE_FAILED`, the relation mutation is never automatically retried and the list refreshes with a separate warning. The editor does not support nested mutations, related-record creation or editing additional junction attributes. See `docs/api_en.md` for details and the complete permission matrix.
 
 After saving, the current record list is refreshed. Forms warn about unsaved changes before closing or leaving the page. Concurrent updates currently have **last write wins** semantics; optimistic locking and conflict detection are not implemented.
 

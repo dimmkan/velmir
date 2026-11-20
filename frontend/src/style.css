@@ -1631,6 +1631,81 @@ textarea:disabled {
   text-underline-offset: 3px;
 }
 
+.relation-option.disabled {
+  color: var(--color-disabled-text);
+  background: var(--color-disabled-background);
+  cursor: not-allowed;
+}
+
+.many-to-many-add {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 10px;
+  min-width: 0;
+  padding: 14px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+}
+
+.many-to-many-add > label {
+  grid-column: 1 / -1;
+  color: var(--color-text-secondary);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.many-to-many-record {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.many-to-many-target {
+  display: grid;
+  flex: 1 1 180px;
+  gap: 6px;
+  min-width: 0;
+}
+
+.many-to-many-target strong {
+  color: var(--color-brand-primary);
+  overflow-wrap: anywhere;
+}
+
+.many-to-many-target code {
+  white-space: normal;
+}
+
+.many-to-many-remove {
+  flex: 0 1 auto;
+  max-width: 100%;
+}
+
+.many-to-many-label-warning {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  color: var(--color-warning);
+  background: var(--color-surface);
+  border: 1px solid var(--color-brand-gold);
+  border-radius: 6px;
+  font-size: 0.8rem;
+}
+
+.many-to-many-panel .audit-warning,
+.many-to-many-panel .delete-success,
+.many-to-many-panel > .form-server-error {
+  margin: 0;
+}
+
 @media (max-width: 1000px) {
   .admin-form-grid,
   .admin-form-grid.two-columns,
@@ -1748,6 +1823,19 @@ textarea:disabled {
 
   .reverse-relation-pagination > div .secondary-button {
     flex: 1;
+  }
+
+  .many-to-many-add {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .many-to-many-add > label {
+    grid-column: auto;
+  }
+
+  .many-to-many-add > .primary-button,
+  .many-to-many-remove {
+    width: 100%;
   }
 
   .login-layout {

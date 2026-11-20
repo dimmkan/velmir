@@ -12,7 +12,7 @@ import {
 } from './relation'
 import type { ResourceMetadata } from './schema'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   backendBaseURL: string
   schemaName: string
   resource: ResourceMetadata
@@ -24,7 +24,9 @@ const props = defineProps<{
   nullable: boolean
   required: boolean
   disabled: boolean
-}>()
+  disabledKeys?: string[]
+  placeholder?: string
+}>(), { disabledKeys: () => [], placeholder: '' })
 const emit = defineEmits<{
   select: [record: RecordRow]
   clear: []
@@ -183,8 +185,12 @@ async function loadSelected() {
   }
 }
 
+function optionDisabled(option: RelationOption): boolean {
+  return props.disabledKeys.includes(option.key)
+}
+
 function selectOption(option: RelationOption) {
-  if (props.disabled) return
+  if (props.disabled || optionDisabled(option)) return
   selectedRecord.value = option.record
   selectionLoadError.value = false
   emit('select', option.record)
@@ -216,6 +222,20 @@ function restoreFocus() {
   })
 }
 
+function moveActiveOption(direction: number) {
+  const count = visibleOptions.value.length
+  if (count === 0) return
+  let index = activeIndex.value < 0 ? (direction > 0 ? -1 : 0) : activeIndex.value
+  for (let step = 0; step < count; step++) {
+    index = (index + direction + count) % count
+    if (!optionDisabled(visibleOptions.value[index])) {
+      activeIndex.value = index
+      return
+    }
+  }
+  activeIndex.value = -1
+}
+
 function handleKeydown(event: KeyboardEvent) {
   if (props.disabled) return
   if (event.key === 'Escape' && isOpen.value) {
@@ -228,9 +248,7 @@ function handleKeydown(event: KeyboardEvent) {
   if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
     event.preventDefault()
     if (!isOpen.value) openDropdown()
-    const direction = event.key === 'ArrowDown' ? 1 : -1
-    const count = visibleOptions.value.length
-    if (count > 0) activeIndex.value = (activeIndex.value + direction + count) % count
+    moveActiveOption(event.key === 'ArrowDown' ? 1 : -1)
     void nextTick(scrollActiveOption)
     return
   }
@@ -303,7 +321,7 @@ onBeforeUnmount(() => {
         type="text"
         role="combobox"
         :value="isOpen ? query : selectedText"
-        :placeholder="t('relation.select')"
+        :placeholder="placeholder || t('relation.select')"
         :aria-label="t('relation.comboboxLabel', { label })"
         :aria-expanded="isOpen"
         :aria-controls="listboxID"
@@ -350,10 +368,12 @@ onBeforeUnmount(() => {
             type="button"
             role="option"
             class="relation-option"
-            :class="{ active: activeIndex === index, selected: option.key === selectedKey }"
+            :class="{ active: activeIndex === index, selected: option.key === selectedKey, disabled: optionDisabled(option) }"
             :aria-selected="option.key === selectedKey"
+            :aria-disabled="optionDisabled(option)"
+            :disabled="optionDisabled(option)"
             @mousedown.prevent
-            @mouseenter="activeIndex = index"
+            @mouseenter="!optionDisabled(option) && (activeIndex = index)"
             @click="selectOption(option)"
           >
             <span>{{ option.label }}</span>

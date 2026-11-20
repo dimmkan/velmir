@@ -2,7 +2,7 @@
 
 [English version](README_EN.md)
 
-Velmir — панель администрирования PostgreSQL, управляемая метаданными. На текущем этапе реализованы introspection схемы, универсальные списки записей с пагинацией, сортировкой, поиском и типизированными фильтрами, related labels, автоматические формы создания и редактирования с many-to-one relation selectors и read-only one-to-many panels, удаление записей с подтверждением, история изменений через Velmir, аутентификация с серверными сессиями, RBAC и управление пользователями и ролями через UI. Many-to-many editor, nested mutations, файлы и автоматизация пока не реализованы.
+Velmir — панель администрирования PostgreSQL, управляемая метаданными. На текущем этапе реализованы introspection схемы, универсальные списки записей с пагинацией, сортировкой, поиском и типизированными фильтрами, related labels, автоматические формы создания и редактирования с many-to-one relation selectors, read-only one-to-many panels и базовый many-to-many editor через junction tables, удаление записей с подтверждением, история изменений через Velmir, аутентификация с серверными сессиями, RBAC и управление пользователями и ролями через UI. Nested mutations, файлы и автоматизация пока не реализованы.
 
 ## Требования
 
@@ -122,7 +122,15 @@ Label выбирается в порядке `display_name`, `name`, `title`, `l
 
 `/api/schema` дополнительно возвращает RBAC-filtered `reverse_relations` с constraint name, child schema/resource и упорядоченными local/referenced columns. На parent form/detail они открывают generic read-only child panels с typed filters по всем частям simple/composite key, отдельной pagination и независимыми loading/empty/401/403/error states. Detail доступен по `read` без save controls; reverse relations с типами, для которых records API не имеет `eq` filter, пока скрываются без запроса. Несохранённый parent показывает **Сначала сохраните запись** и не запускает child query. Панели не содержат create/edit/delete controls и не сбрасывают parent values или pagination при смене языка.
 
-Права проверяются backend и frontend независимо: read только на parent скрывает labels/panels; read на parent и child разрешает их; read только на referenced resource не открывает resolve для недоступного current resource. Пользователь без session получает 401, authenticated без permission — 403 без login redirect. Подробный batch contract, reverse metadata и permission matrix приведены в `docs/api.md`. Many-to-many editor, создание дочерних записей из parent form и nested mutations не реализованы.
+Права проверяются backend и frontend независимо: read только на parent скрывает labels/panels; read на parent и child разрешает их; read только на referenced resource не открывает resolve для недоступного current resource. Пользователь без session получает 401, authenticated без permission — 403 без login redirect. Подробный batch contract, reverse metadata и permission matrix приведены в `docs/api.md`. Создание дочерних записей из parent form и nested mutations не реализованы.
+
+### Many-to-many editor через junction tables
+
+Parent form/detail generic-образом показывает target records через поддерживаемую PostgreSQL junction table. Detection использует только RBAC-filtered `/api/schema`: нужны ровно два many-to-one FK к разным ресурсам и composite PK ровно из колонок обоих FK; дополнительные поля должны быть nullable или иметь default/generated/identity values. Self-referential relations, surrogate PK, три и более FK и обязательные дополнительные junction attributes без default/generated не поддерживаются и остаются обычными ресурсами/reverse panels.
+
+Для панели нужны `read` на parent, target и junction. Записи загружаются существующим records list с typed parent filters и pagination, labels — одним batch relations/resolve на страницу. **Добавить связь** требует writer, `create` на junction и `read` на target, использует selector с server-side search и обычный flat junction POST. **Удалить связь** требует writer и `delete` на junction, использует DELETE по полному composite junction PK. Её confirmation прямо сообщает, что удаляется только junction record, а parent/target records остаются без изменений; это не обычное **Удалить запись**. Права `update` на parent/target не нужны.
+
+Создание и удаление связи создают обычные audit `create`/`delete` только для junction resource. Duplicate/failed mutations не аудируются; после `AUDIT_WRITE_FAILED` committed связь не повторяется автоматически, список обновляется с отдельным предупреждением. Editor не поддерживает nested mutations, создание связанных записей или редактирование дополнительных junction attributes. Подробности и полная permission matrix приведены в `docs/api.md`.
 
 После сохранения текущий список записей обновляется. Формы предупреждают о несохранённых изменениях перед закрытием или уходом со страницы. При конкурентных обновлениях сейчас действует семантика **last write wins**; optimistic locking и обнаружение конфликтов не реализованы.
 

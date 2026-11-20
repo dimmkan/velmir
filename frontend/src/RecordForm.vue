@@ -19,7 +19,9 @@ import type { ColumnMetadata, ForeignKeyMetadata, ResourceMetadata, SchemaMetada
 import { findReferencedResource } from './relation'
 import RelationSelector from './RelationSelector.vue'
 import ReverseRelationPanel from './ReverseRelationPanel.vue'
+import ManyToManyPanel from './ManyToManyPanel.vue'
 import { readableReverseRelations } from './relatedRecords'
+import { readableManyToManyRelations } from './manyToMany'
 import { errorTranslationKey, fieldErrorTranslationKey } from './i18n'
 
 interface RelationView {
@@ -40,7 +42,8 @@ const props = withDefaults(defineProps<{
   mode: FormMode
   record?: RecordRow
   updateAllowed?: boolean
-}>(), { updateAllowed: true })
+  writeEnabled?: boolean
+}>(), { updateAllowed: true, writeEnabled: false })
 const emit = defineEmits<{
   saved: [record: RecordRow]
   'audit-failed': [record: RecordRow | null]
@@ -77,7 +80,19 @@ const resolvedRelations = computed(() => {
   return relations
 })
 
-const reverseRelations = computed(() => readableReverseRelations(props.resource, props.schemas ?? []))
+const manyToManyRelations = computed(() => readableManyToManyRelations(
+  props.schemaName,
+  props.resource,
+  props.schemas ?? [],
+))
+const reverseRelations = computed(() => {
+  const junctionRelations = new Set(manyToManyRelations.value.map((relation) =>
+    `${relation.junctionSchema}.${relation.junctionResource.name}.${relation.parentForeignKey.name}`,
+  ))
+  return readableReverseRelations(props.resource, props.schemas ?? []).filter((item) =>
+    !junctionRelations.has(`${item.relation.schema}.${item.relation.resource}.${item.relation.name}`),
+  )
+})
 
 const formEntries = computed<FormEntry[]>(() => {
   const byFirstColumn = new Map(resolvedRelations.value.map((relation) => [relation.foreignKey.columns[0], relation]))
@@ -418,23 +433,34 @@ function baseType(dataType: string): string {
       </div>
     </form>
 
-    <section v-if="reverseRelations.length" class="reverse-relations" :aria-label="t('relation.childRecords')">
+    <section v-if="reverseRelations.length || manyToManyRelations.length" class="reverse-relations" :aria-label="t('relation.relatedRecords')">
       <div class="reverse-relations-heading">
         <p class="eyebrow">{{ t('relation.relatedRecords') }}</p>
-        <h3>{{ t('relation.childRecords') }}</h3>
+        <h3>{{ t('relation.relatedRecords') }}</h3>
       </div>
       <p v-if="mode === 'create'" class="reverse-relation-save-first" role="status">
         {{ t('relation.saveRecordFirst') }}
       </p>
-      <ReverseRelationPanel
-        v-else
-        v-for="item in reverseRelations"
-        :key="`${item.relation.schema}.${item.relation.resource}.${item.relation.name}`"
-        :backend-base-u-r-l="backendBaseURL"
-        :relation="item.relation"
-        :child-resource="item.childResource"
-        :parent-record="record"
-      />
+      <template v-else>
+        <ManyToManyPanel
+          v-for="relation in manyToManyRelations"
+          :key="relation.id"
+          :backend-base-u-r-l="backendBaseURL"
+          :parent-name="`${schemaName}.${resource.name}`"
+          :relation="relation"
+          :schemas="schemas ?? []"
+          :parent-record="record"
+          :write-enabled="writeEnabled"
+        />
+        <ReverseRelationPanel
+          v-for="item in reverseRelations"
+          :key="`${item.relation.schema}.${item.relation.resource}.${item.relation.name}`"
+          :backend-base-u-r-l="backendBaseURL"
+          :relation="item.relation"
+          :child-resource="item.childResource"
+          :parent-record="record"
+        />
+      </template>
     </section>
   </section>
 </template>
