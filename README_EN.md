@@ -2,7 +2,7 @@
 
 [Русская версия](README.md)
 
-Velmir is a metadata-driven PostgreSQL admin panel. The current stage provides schema introspection, universal record lists with pagination, sorting, search and typed filters, automatic forms for creating and editing records, confirmed record deletion, change history for changes made through Velmir, server-side session authentication, RBAC and user/role management UI. Relations UI, files and automation are not implemented.
+Velmir is a metadata-driven PostgreSQL admin panel. The current stage provides schema introspection, universal record lists with pagination, sorting, search and typed filters, automatic forms with many-to-one relation selectors for creating and editing records, confirmed record deletion, change history for changes made through Velmir, server-side session authentication, RBAC and user/role management UI. One-to-many panels, a many-to-many editor, files and automation are not implemented.
 
 ## Requirements
 
@@ -107,6 +107,14 @@ To run without a target database, leave `TARGET_DATABASE_URL` empty. The backend
 The frontend builds all forms from `/api/schema`; there are no table-specific forms. Supported inputs cover text, boolean, integer, bigint/numeric, date, timestamps, UUID, enums and JSON. Nullable fields have an explicit NULL control, and create forms can explicitly use a database default. Generated and `always` identity fields are not required or editable.
 
 Updates and deletes require a primary key, including composite keys, and updates cannot change primary-key fields. Tables without a primary key allow creation but not updates or deletes. Views are read-only. Unsupported PostgreSQL types are displayed but not edited automatically. PostgreSQL not-null, unique, foreign-key and check violations are shown as API/form errors.
+
+### Many-to-one relation selectors
+
+When the user has `read` on the referenced resource, forms generically replace raw FK inputs with selectors driven by `/api/schema` metadata. A simple FK uses one selector, while a composite FK uses one logical selector for every local/referenced column. Only the first 20-record page is loaded; search runs on the server with a 300 ms debounce, and **Load more** appends later pages. During editing, the current value is fetched separately through exact typed filters on every referenced column, so it is preserved even when absent from the first page.
+
+Display labels use `display_name`, `name`, `title`, `label`, another non-empty text field, then the technical identifier, with every referenced key part shown alongside. The selector only fills existing FK columns in the unchanged POST/PATCH payload. A nullable relation can be cleared as a whole, a required one cannot, and a partially populated composite FK is never submitted. Bigint/numeric and UUID values retain their string representation, and NULL remains JSON `null`.
+
+Without `read` on the referenced resource, related records and labels are not requested: the safe raw FK input remains, and available FK metadata does not expose the hidden resource. Read-only controls cannot change the relation. There are no nested mutations or automatic related-record creation/editing. One-to-many panels and a many-to-many editor are not included at this stage. See `docs/api_en.md` for details and RBAC filtering.
 
 After saving, the current record list is refreshed. Forms warn about unsaved changes before closing or leaving the page. Concurrent updates currently have **last write wins** semantics; optimistic locking and conflict detection are not implemented.
 

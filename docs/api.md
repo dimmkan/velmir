@@ -253,6 +253,20 @@ HTTP 200:
 
 Запросы записей и интроспекции имеют backend timeout 10 секунд и используют контекст запроса, поэтому отмена клиентом передаётся в PostgreSQL.
 
+## Many-to-one selectors в формах записей
+
+Frontend использует существующие `foreign_keys` из `/api/schema` без отдельной конфигурации ресурсов. Для каждого many-to-one FK учитываются упорядоченные `columns`, `referenced_schema`, `referenced_table`, `referenced_columns`, а также `nullable` и `editable` локальных столбцов. Simple FK заменяется одним selector; все части composite FK объединяются в один логический selector. Если столбец нельзя редактировать или это PK при update, сохраняется read-only/raw control.
+
+Selector запрашивает только первую страницу через существующий records list endpoint (`limit=20`), выполняет server-side search с debounce 300 ms и добавляет следующие страницы кнопкой **Load more**. Вся referenced table не загружается. При editing текущее значение отдельно запрашивается точными `eq` filters по всем referenced columns с `limit=1`, поэтому оно отображается, даже если отсутствует на первой странице. До загрузки label или при ошибке технический key не заменяется пустым значением.
+
+Человекочитаемый label выбирается generic-образом в порядке `display_name`, `name`, `title`, `label`, другое непустое текстовое поле, затем technical identifier. Рядом выводятся все referenced key columns в порядке FK, чтобы различать одинаковые имена и составные ключи. Используются только поля, возвращённые authorized records API.
+
+Selector заполняет только существующие локальные FK columns в прежнем flat `values` для POST/PATCH. Composite FK отправляется либо целиком, либо, если все его части nullable, очищается целиком в JSON `null`; частичное значение блокируется клиентской validation. Required relation нельзя очистить. Bigint/numeric и UUID остаются строками, а `null` не преобразуется в строку. Nested payloads, автоматическое создание или редактирование связанных записей и новые mutation endpoints отсутствуют. CSRF, server validation, constraint errors, audit и запрет automatic retry после `AUDIT_WRITE_FAILED` не меняются.
+
+Referenced records запрашиваются только при наличии `read` на referenced resource и его metadata в авторизованном `/api/schema`. Иначе related requests и labels отсутствуют; остаётся существующий raw FK input, а если FK metadata известна, но referenced resource недоступен, показывается локализованное пояснение без technical internals. Backend по-прежнему полностью исключает FK на недоступный ресурс из `/api/schema`, поэтому такая фильтрация сама по себе не раскрывает referenced resource. Read-only controls не допускают изменения selector; `create`, `update` и `delete` остаются отдельными backend permissions.
+
+На этом этапе отсутствуют one-to-many panels и many-to-many editor. Этот frontend behavior не меняет публичные API contracts.
+
 ## POST /api/resources/{schema}/{resource}/records
 
 Создаёт запись в таблице. Требуются право `create` для ресурса и действительный CSRF token; без права возвращается HTTP 403 `FORBIDDEN`. Endpoint доступен только при настроенном `TARGET_WRITE_DATABASE_URL`; интроспекция и проверка идентификаторов по-прежнему используют свежие метаданные, прочитанные через `TARGET_DATABASE_URL`.

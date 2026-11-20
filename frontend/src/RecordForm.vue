@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { can } from './auth'
 import { formatRecordValue, type RecordRow } from './records'
 import {
   buildCreatePayload,
@@ -14,13 +15,26 @@ import {
   type RecordFormState,
 } from './recordForm'
 import { buildRecordKey, createRecord, MutationRequestError, updateRecord } from './mutations'
-import type { ColumnMetadata, ResourceMetadata } from './schema'
+import type { ColumnMetadata, ForeignKeyMetadata, ResourceMetadata, SchemaMetadata } from './schema'
+import { findReferencedResource } from './relation'
+import RelationSelector from './RelationSelector.vue'
 import { errorTranslationKey, fieldErrorTranslationKey } from './i18n'
+
+interface RelationView {
+  foreignKey: ForeignKeyMetadata
+  resource: ResourceMetadata
+  columns: ColumnMetadata[]
+}
+
+type FormEntry =
+  | { key: string; kind: 'relation'; relation: RelationView }
+  | { key: string; kind: 'column'; column: ColumnMetadata }
 
 const props = defineProps<{
   backendBaseURL: string
   schemaName: string
   resource: ResourceMetadata
+  schemas?: SchemaMetadata[]
   mode: FormMode
   record?: RecordRow
 }>()
@@ -33,6 +47,7 @@ const emit = defineEmits<{
 
 const { t, locale } = useI18n()
 const state = ref<RecordFormState>({})
+const relationSelections = ref<Record<string, boolean>>({})
 let initial: RecordFormState = {}
 const saving = ref(false)
 const serverError = ref('')
@@ -42,13 +57,68 @@ const fieldErrors = ref<Record<string, string>>({})
 
 const dirty = computed(() => isFormDirty(state.value, initial))
 
+const resolvedRelations = computed(() => {
+  const relations: RelationView[] = []
+  for (const foreignKey of props.resource.foreign_keys) {
+    const columns = relationColumns(foreignKey)
+    if (!columns || columns.some(isReadOnly)) continue
+    const resource = findReferencedResource(
+      props.schemas ?? [],
+      foreignKey.referenced_schema,
+      foreignKey.referenced_table,
+    )
+    if (!resource || !can(foreignKey.referenced_schema, foreignKey.referenced_table, 'read')) continue
+    relations.push({ foreignKey, resource, columns })
+  }
+  return relations
+})
+
+const formEntries = computed<FormEntry[]>(() => {
+  const byFirstColumn = new Map(resolvedRelations.value.map((relation) => [relation.foreignKey.columns[0], relation]))
+  const groupedColumns = new Set(resolvedRelations.value.flatMap((relation) => relation.foreignKey.columns.slice(1)))
+  const entries: FormEntry[] = []
+  for (const column of props.resource.columns) {
+    const relation = byFirstColumn.get(column.name)
+    if (relation) entries.push({ key: `relation-${relation.foreignKey.name}`, kind: 'relation', relation })
+    else if (!groupedColumns.has(column.name)) entries.push({ key: column.name, kind: 'column', column })
+  }
+  return entries
+})
+
 function resetForm() {
   initial = initialFormState(props.mode, props.resource, props.record)
   state.value = cloneFormState(initial)
+  const selections: Record<string, boolean> = {}
+  for (const foreignKey of props.resource.foreign_keys) {
+    selections[foreignKey.name] = props.mode === 'edit' && foreignKey.columns.some((column) => {
+      const value = props.record?.[column]
+      return value !== null && value !== undefined
+    })
+  }
+  relationSelections.value = selections
   serverError.value = ''
   serverErrorCode.value = ''
   serverErrorStatus.value = 0
   fieldErrors.value = {}
+}
+
+function relationColumns(foreignKey: ForeignKeyMetadata): ColumnMetadata[] | null {
+  if (foreignKey.columns.length === 0 || foreignKey.columns.length !== foreignKey.referenced_columns.length) return null
+  const columns = foreignKey.columns.map((name) => props.resource.columns.find((column) => column.name === name))
+  return columns.every((column): column is ColumnMetadata => Boolean(column)) ? columns : null
+}
+
+function unavailableRelation(columnName: string): ForeignKeyMetadata | null {
+  const foreignKey = props.resource.foreign_keys.find((relation) =>
+    relation.columns[0] === columnName && relationColumns(relation),
+  )
+  if (!foreignKey || resolvedRelations.value.some((relation) => relation.foreignKey.name === foreignKey.name)) return null
+  const resource = findReferencedResource(
+    props.schemas ?? [],
+    foreignKey.referenced_schema,
+    foreignKey.referenced_table,
+  )
+  return !resource || !can(foreignKey.referenced_schema, foreignKey.referenced_table, 'read') ? foreignKey : null
 }
 
 function inputType(column: ColumnMetadata): string {
@@ -78,6 +148,66 @@ function readOnlyText(column: ColumnMetadata): string {
 function editField(field: FormFieldState) {
   field.useDefault = false
   field.isNull = false
+}
+
+function relationRequired(relation: RelationView): boolean {
+  return relation.columns.some((column) => !column.nullable)
+}
+
+function relationNullable(relation: RelationView): boolean {
+  return relation.columns.every((column) => column.nullable)
+}
+
+function relationCanUseDefault(relation: RelationView): boolean {
+  return props.mode === 'create' && relation.columns.every((column) =>
+    column.default !== null || column.identity !== '' || column.generated,
+  )
+}
+
+function relationUsesDefault(relation: RelationView): boolean {
+  return relation.foreignKey.columns.every((column) => state.value[column]?.useDefault)
+}
+
+function toggleRelationDefault(relation: RelationView, event: Event) {
+  const useDefault = (event.target as HTMLInputElement).checked
+  for (const column of relation.foreignKey.columns) state.value[column].useDefault = useDefault
+  if (useDefault) relationSelections.value[relation.foreignKey.name] = false
+}
+
+function relationSelectedValues(relation: RelationView): unknown[] {
+  return relation.foreignKey.columns.map((column) => {
+    const field = state.value[column]
+    return field.isNull || field.useDefault ? null : field.value
+  })
+}
+
+function selectRelation(relation: RelationView, record: RecordRow) {
+  relation.foreignKey.columns.forEach((localColumn, index) => {
+    const value = record[relation.foreignKey.referenced_columns[index]]
+    const field = state.value[localColumn]
+    field.value = value !== null && typeof value === 'object' ? JSON.stringify(value) : value === null ? '' : String(value)
+    field.isNull = value === null
+    field.useDefault = false
+  })
+  relationSelections.value[relation.foreignKey.name] = true
+}
+
+function clearRelation(relation: RelationView) {
+  if (!relationNullable(relation)) return
+  for (const column of relation.foreignKey.columns) {
+    const field = state.value[column]
+    field.value = ''
+    field.isNull = true
+    field.useDefault = false
+  }
+  relationSelections.value[relation.foreignKey.name] = false
+}
+
+function relationError(relation: RelationView): string {
+  for (const column of relation.foreignKey.columns) {
+    if (fieldErrors.value[column]) return fieldErrors.value[column]
+  }
+  return ''
 }
 
 async function save() {
@@ -164,72 +294,112 @@ function baseType(dataType: string): string {
     </div>
 
     <form class="record-form" @submit.prevent="save">
-      <div v-for="column in resource.columns" :key="column.name" class="record-form-field">
-        <div class="field-label">
-          <label :for="`field-${column.name}`">{{ column.name }}</label>
-          <code>{{ column.data_type }}</code>
-          <span v-if="column.primary_key" class="field-badge">PK</span>
-          <span v-if="!column.nullable && !isReadOnly(column) && !state[column.name].useDefault" class="field-required">{{ t('form.required') }}</span>
-        </div>
-
-        <template v-if="isReadOnly(column)">
-          <input :id="`field-${column.name}`" :value="readOnlyText(column)" disabled />
-        </template>
-        <template v-else>
-          <div v-if="mode === 'create' && (column.default !== null || column.identity !== '' || column.generated)" class="field-options">
+      <template v-for="entry in formEntries" :key="entry.key">
+        <div v-if="entry.kind === 'relation'" class="record-form-field relation-form-field">
+          <div class="field-label">
+            <label :for="`field-${entry.relation.foreignKey.columns[0]}`">{{ entry.relation.foreignKey.columns.join(' + ') }}</label>
+            <code>{{ entry.relation.columns.map((column) => column.data_type).join(' · ') }}</code>
+            <span v-if="relationRequired(entry.relation) && !relationUsesDefault(entry.relation)" class="field-required">{{ t('form.required') }}</span>
+          </div>
+          <div v-if="relationCanUseDefault(entry.relation)" class="field-options">
             <label>
-              <input v-model="state[column.name].useDefault" type="checkbox" />
+              <input
+                type="checkbox"
+                :checked="relationUsesDefault(entry.relation)"
+                @change="toggleRelationDefault(entry.relation, $event)"
+              />
               {{ t('form.useDefault') }}
             </label>
           </div>
-          <div v-if="column.nullable && !state[column.name].useDefault" class="field-options">
-            <label>
-              <input v-model="state[column.name].isNull" type="checkbox" @change="state[column.name].useDefault = false" />
-              {{ t('form.null') }}
-            </label>
+          <RelationSelector
+            :backend-base-u-r-l="backendBaseURL"
+            :schema-name="entry.relation.foreignKey.referenced_schema"
+            :resource="entry.relation.resource"
+            :referenced-columns="entry.relation.foreignKey.referenced_columns"
+            :selected-values="relationSelectedValues(entry.relation)"
+            :has-selection="relationSelections[entry.relation.foreignKey.name] ?? false"
+            :input-id="`field-${entry.relation.foreignKey.columns[0]}`"
+            :label="entry.relation.foreignKey.columns.join(' + ')"
+            :nullable="relationNullable(entry.relation)"
+            :required="relationRequired(entry.relation)"
+            :disabled="saving || relationUsesDefault(entry.relation)"
+            @select="selectRelation(entry.relation, $event)"
+            @clear="clearRelation(entry.relation)"
+          />
+          <p class="relation-target">
+            {{ t('relation.target', { resource: `${entry.relation.foreignKey.referenced_schema}.${entry.relation.foreignKey.referenced_table}` }) }}
+          </p>
+          <p v-if="relationError(entry.relation)" class="field-error" role="alert">{{ t(relationError(entry.relation)) }}</p>
+        </div>
+
+        <div v-else class="record-form-field">
+          <div class="field-label">
+            <label :for="`field-${entry.column.name}`">{{ entry.column.name }}</label>
+            <code>{{ entry.column.data_type }}</code>
+            <span v-if="entry.column.primary_key" class="field-badge">PK</span>
+            <span v-if="!entry.column.nullable && !isReadOnly(entry.column) && !state[entry.column.name].useDefault" class="field-required">{{ t('form.required') }}</span>
           </div>
 
-          <select
-            v-if="column.enum_values.length > 0"
-            :id="`field-${column.name}`"
-            v-model="state[column.name].value"
-            :disabled="saving || state[column.name].isNull || state[column.name].useDefault"
-            @change="editField(state[column.name])"
-          >
-            <option value="" disabled>{{ t('form.chooseValue') }}</option>
-            <option v-for="value in column.enum_values" :key="value" :value="value">{{ value }}</option>
-          </select>
-          <select
-            v-else-if="baseType(column.data_type) === 'boolean'"
-            :id="`field-${column.name}`"
-            v-model="state[column.name].value"
-            :disabled="saving || state[column.name].isNull || state[column.name].useDefault"
-            @change="editField(state[column.name])"
-          >
-            <option value="true">true</option>
-            <option value="false">false</option>
-          </select>
-          <textarea
-            v-else-if="['json', 'jsonb'].includes(baseType(column.data_type))"
-            :id="`field-${column.name}`"
-            v-model="state[column.name].value"
-            rows="5"
-            :disabled="saving || state[column.name].isNull || state[column.name].useDefault"
-            @input="editField(state[column.name])"
-          />
-          <input
-            v-else
-            :id="`field-${column.name}`"
-            v-model="state[column.name].value"
-            :type="inputType(column)"
-            :placeholder="inputPlaceholder(column)"
-            :disabled="saving || state[column.name].isNull || state[column.name].useDefault"
-            autocomplete="off"
-            @input="editField(state[column.name])"
-          />
-        </template>
-        <p v-if="fieldErrors[column.name]" class="field-error" role="alert">{{ t(fieldErrors[column.name]) }}</p>
-      </div>
+          <template v-if="isReadOnly(entry.column)">
+            <input :id="`field-${entry.column.name}`" :value="readOnlyText(entry.column)" disabled />
+          </template>
+          <template v-else>
+            <div v-if="mode === 'create' && (entry.column.default !== null || entry.column.identity !== '' || entry.column.generated)" class="field-options">
+              <label>
+                <input v-model="state[entry.column.name].useDefault" type="checkbox" />
+                {{ t('form.useDefault') }}
+              </label>
+            </div>
+            <div v-if="entry.column.nullable && !state[entry.column.name].useDefault" class="field-options">
+              <label>
+                <input v-model="state[entry.column.name].isNull" type="checkbox" @change="state[entry.column.name].useDefault = false" />
+                {{ t('form.null') }}
+              </label>
+            </div>
+
+            <select
+              v-if="entry.column.enum_values.length > 0"
+              :id="`field-${entry.column.name}`"
+              v-model="state[entry.column.name].value"
+              :disabled="saving || state[entry.column.name].isNull || state[entry.column.name].useDefault"
+              @change="editField(state[entry.column.name])"
+            >
+              <option value="" disabled>{{ t('form.chooseValue') }}</option>
+              <option v-for="value in entry.column.enum_values" :key="value" :value="value">{{ value }}</option>
+            </select>
+            <select
+              v-else-if="baseType(entry.column.data_type) === 'boolean'"
+              :id="`field-${entry.column.name}`"
+              v-model="state[entry.column.name].value"
+              :disabled="saving || state[entry.column.name].isNull || state[entry.column.name].useDefault"
+              @change="editField(state[entry.column.name])"
+            >
+              <option value="true">true</option>
+              <option value="false">false</option>
+            </select>
+            <textarea
+              v-else-if="['json', 'jsonb'].includes(baseType(entry.column.data_type))"
+              :id="`field-${entry.column.name}`"
+              v-model="state[entry.column.name].value"
+              rows="5"
+              :disabled="saving || state[entry.column.name].isNull || state[entry.column.name].useDefault"
+              @input="editField(state[entry.column.name])"
+            />
+            <input
+              v-else
+              :id="`field-${entry.column.name}`"
+              v-model="state[entry.column.name].value"
+              :type="inputType(entry.column)"
+              :placeholder="inputPlaceholder(entry.column)"
+              :disabled="saving || state[entry.column.name].isNull || state[entry.column.name].useDefault"
+              autocomplete="off"
+              @input="editField(state[entry.column.name])"
+            />
+          </template>
+          <p v-if="unavailableRelation(entry.column.name)" class="relation-unavailable">{{ t('relation.unavailable') }}</p>
+          <p v-if="fieldErrors[entry.column.name]" class="field-error" role="alert">{{ t(fieldErrors[entry.column.name]) }}</p>
+        </div>
+      </template>
 
       <div class="record-form-actions">
         <button type="submit" class="primary-button" :disabled="saving || (mode === 'edit' && !dirty)">

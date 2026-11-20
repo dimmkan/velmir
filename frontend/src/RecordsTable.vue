@@ -17,7 +17,7 @@ import {
   type RecordsQueryState,
   type RecordsResponse,
 } from './records'
-import type { ResourceMetadata } from './schema'
+import type { ResourceMetadata, SchemaMetadata } from './schema'
 import RecordForm from './RecordForm.vue'
 import RecordHistory from './RecordHistory.vue'
 import RecordDeleteDialog from './RecordDeleteDialog.vue'
@@ -29,6 +29,7 @@ const props = defineProps<{
   backendBaseURL: string
   schemaName: string
   resource: ResourceMetadata
+  schemas?: SchemaMetadata[]
   writeEnabled: boolean
   readAllowed: boolean
   createAllowed: boolean
@@ -322,6 +323,7 @@ onBeforeUnmount(() => {
       :backend-base-u-r-l="backendBaseURL"
       :schema-name="schemaName"
       :resource="resource"
+      :schemas="schemas ?? []"
       :mode="formMode"
       :record="activeRecord"
       @saved="recordSaved"

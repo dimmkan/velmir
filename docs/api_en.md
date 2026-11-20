@@ -253,6 +253,20 @@ Errors use the same `error.code` and `error.message` envelope as schema introspe
 
 Records and introspection queries have a 10-second backend timeout and use the request context, so client cancellation propagates to PostgreSQL.
 
+## Many-to-one selectors in record forms
+
+The frontend uses the existing `foreign_keys` from `/api/schema` without per-resource configuration. For each many-to-one FK it uses the ordered `columns`, `referenced_schema`, `referenced_table`, `referenced_columns`, plus the local columns' `nullable` and `editable` flags. A simple FK becomes one selector; every part of a composite FK is grouped into one logical selector. Non-editable columns and primary keys during update retain their read-only/raw controls.
+
+The selector requests only the first page through the existing records list endpoint (`limit=20`), performs server-side search with a 300 ms debounce, and appends subsequent pages with **Load more**. It never loads the whole referenced table. During editing, the current value is fetched separately using exact `eq` filters for every referenced column with `limit=1`, so it is displayed even when absent from the first page. Its technical key is preserved rather than replaced with an empty value while the label loads or if that request fails.
+
+The generic display label priority is `display_name`, `name`, `title`, `label`, another non-empty text field, then the technical identifier. Every referenced key column is shown alongside the label in FK order to distinguish duplicate names and composite keys. Only fields returned by the authorized records API are used.
+
+The selector fills only existing local FK columns in the same flat `values` POST/PATCH payload. A composite FK is either complete or, when every part is nullable, cleared entirely to JSON `null`; client validation blocks partial values. A required relation cannot be cleared. Bigint/numeric and UUID values remain strings, and `null` is never converted to a string. There are no nested payloads, automatic related-record creation or editing, or new mutation endpoints. CSRF, server validation, constraint errors, audit behavior and the prohibition on automatic retry after `AUDIT_WRITE_FAILED` are unchanged.
+
+Related records are requested only when the user has `read` on the referenced resource and its metadata is present in the authorized `/api/schema`. Otherwise, no related requests or labels are exposed; the existing raw FK input remains, with a localized explanation without technical internals when FK metadata is known but the referenced resource is unavailable. The backend still omits foreign keys to inaccessible resources from `/api/schema` entirely, so this filtering alone does not disclose the referenced resource. Read-only controls cannot change the selector, and `create`, `update` and `delete` remain separate backend permissions.
+
+This stage does not include one-to-many panels or a many-to-many editor. This frontend behavior does not change the public API contracts.
+
 ## POST /api/resources/{schema}/{resource}/records
 
 Creates a record in a table. It requires `create` on the resource and a valid CSRF token; without the permission it returns HTTP 403 `FORBIDDEN`. This endpoint is available only when `TARGET_WRITE_DATABASE_URL` is configured; introspection and identifier validation still use fresh metadata read through `TARGET_DATABASE_URL`.

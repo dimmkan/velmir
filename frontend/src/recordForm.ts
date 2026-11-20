@@ -87,6 +87,32 @@ export function validateRecordForm(
     const error = validateType(column, value)
     if (error) errors[column.name] = error
   }
+  for (const foreignKey of resource.foreign_keys) {
+    if (foreignKey.columns.length === 0 || foreignKey.columns.length !== foreignKey.referenced_columns.length) continue
+    const columns = foreignKey.columns.map((name) => resource.columns.find((column) => column.name === name))
+    if (columns.some((column) => !column)) continue
+    const fields = foreignKey.columns.map((name) => state[name])
+    if (fields.some((field) => !field)) continue
+
+    const defaultCount = fields.filter((field) => field.useDefault).length
+    if (defaultCount === fields.length) continue
+    const nullCount = fields.filter((field) => field.isNull).length
+    const present = fields.map((field) => !field.useDefault && !field.isNull && field.value !== '')
+    const presentCount = present.filter(Boolean).length
+    const editableColumns = columns.filter((column): column is ColumnMetadata =>
+      Boolean(column?.editable && !(mode === 'edit' && column.primary_key)),
+    )
+
+    if (foreignKey.columns.length > 1 && (
+      presentCount > 0 && presentCount < fields.length ||
+      nullCount > 0 && nullCount < fields.length ||
+      defaultCount > 0
+    )) {
+      for (const column of editableColumns) errors[column.name] = 'validation.incompleteRelation'
+    } else if (presentCount === 0 && columns.some((column) => !column?.nullable)) {
+      for (const column of editableColumns) errors[column.name] = 'validation.requiredRelation'
+    }
+  }
   return errors
 }
 

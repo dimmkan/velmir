@@ -336,6 +336,7 @@ onBeforeUnmount(() => window.removeEventListener('popstate', handlePopState))
             :backend-base-u-r-l="backendBaseURL"
             :schema-name="selectedSchemaName"
             :resource="selectedResource"
+            :schemas="catalog?.schemas ?? []"
             :write-enabled="catalog?.write_enabled ?? false"
             :read-allowed="readAllowed"
             :create-allowed="createAllowed"
