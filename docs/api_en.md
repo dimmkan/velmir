@@ -144,6 +144,8 @@ Successful response (HTTP 200):
 
 `kind` is `table` or `view`. `default` is `null` when no default exists. `primary_key` marks a key column. `identity` is an empty string, `always` or `by_default`; `generated` marks generated columns. `editable` is true only for supported, non-generated table columns (an `always` identity is not editable). `enum_values` contains allowed labels for enum types and is empty otherwise. Composite primary and foreign keys preserve column order. Empty collections are returned as arrays.
 
+Every resource also contains `reverse_relations`, one-to-many metadata derived from the same introspected FKs without adding objects to the target schema. Each entry contains the constraint `name`, child `schema`/`resource`, child local `columns` and parent `referenced_columns` in matching order. For example, an `authors` relation is `{"name":"books_author_id_fkey","schema":"public","resource":"books","columns":["author_id"],"referenced_columns":["id"]}`. Reverse relations are built only after RBAC filtering: resources without `read`, their FKs and inaccessible child resource names are omitted and never disclosed.
+
 `write_enabled` is true only when the optional target write pool is configured and the current user has at least one `create`, `update` or `delete` grant. It does not guarantee that every resource or column is writable; frontend controls additionally use effective permissions.
 
 If no target database is configured, the endpoint returns HTTP 503:
@@ -253,6 +255,44 @@ Errors use the same `error.code` and `error.message` envelope as schema introspe
 
 Records and introspection queries have a 10-second backend timeout and use the request context, so client cancellation propagates to PostgreSQL.
 
+## POST /api/resources/{schema}/{resource}/relations/resolve
+
+A read-only batch endpoint for related labels in record lists. Despite using POST, it changes no state: CSRF is not required, and neither the writer DSN nor audit is used. It requires a session, `read` on the current path resource, and `read` on every referenced resource. A missing session returns 401; any missing grant returns 403 `FORBIDDEN` without a login redirect or disclosure of the inaccessible resource name.
+
+The request body contains known FK relations and key objects containing exactly the referenced columns:
+
+```json
+{
+  "relations": [
+    {
+      "name": "books_author_id_fkey",
+      "keys": [{"id":"9223372036854775807"}, {"id":null}]
+    },
+    {
+      "name": "children_parent_fk",
+      "keys": [{"tenant_id":"7", "external_id":"00112233-4455-6677-8899-aabbccddeeff"}]
+    }
+  ]
+}
+```
+
+Simple and composite keys are supported. Bigint/numeric values use strings, UUIDs use canonical strings, and integer JSON numbers are also accepted. Keys are deduplicated within each relation; a key with `null` in any part is skipped. Empty `keys` or NULL-only keys return empty `records` without executing SQL. Limits are a 256 KiB body, at most 20 relations, 200 input keys per relation and 1000 input keys in total. Duplicate relation names, unknown relations/columns/resources, extra or missing key parts, and invalid value types return HTTP 400 `INVALID_RELATION_RESOLVE`.
+
+The response preserves relation order:
+
+```json
+{
+  "relations": [
+    {
+      "name": "books_author_id_fkey",
+      "records": [{"id":"9223372036854775807", "name":"Author"}]
+    }
+  ]
+}
+```
+
+Each relation uses one parameterized SELECT through the read-only target pool, regardless of key count. Schema, resource, relation and columns are checked against fresh metadata allowlists; identifiers are quoted and arbitrary SQL is not accepted. Only the referenced key, PK and text fields needed by the shared display label helper are selected. Values use the records API representation, including exact bigint/numeric, UUID, JSON/JSONB and Base64 bytea for selected key fields. Query failures return HTTP 500 `RELATION_RESOLVE_FAILED` without SQL or stack traces.
+
 ## Many-to-one selectors in record forms
 
 The frontend uses the existing `foreign_keys` from `/api/schema` without per-resource configuration. For each many-to-one FK it uses the ordered `columns`, `referenced_schema`, `referenced_table`, `referenced_columns`, plus the local columns' `nullable` and `editable` flags. A simple FK becomes one selector; every part of a composite FK is grouped into one logical selector. Non-editable columns and primary keys during update retain their read-only/raw controls.
@@ -265,7 +305,13 @@ The selector fills only existing local FK columns in the same flat `values` POST
 
 Related records are requested only when the user has `read` on the referenced resource and its metadata is present in the authorized `/api/schema`. Otherwise, no related requests or labels are exposed; the existing raw FK input remains, with a localized explanation without technical internals when FK metadata is known but the referenced resource is unavailable. The backend still omits foreign keys to inaccessible resources from `/api/schema` entirely, so this filtering alone does not disclose the referenced resource. Read-only controls cannot change the selector, and `create`, `update` and `delete` remain separate backend permissions.
 
-This stage does not include one-to-many panels or a many-to-many editor. This frontend behavior does not change the public API contracts.
+## Related labels and read-only one-to-many panels
+
+Many-to-one FK cells in `RecordsTable` use the same shared display label helper as selectors. One batch resolve per relation group replaces per-row/per-key HTTP requests, and repeated FK values are deduplicated. Every referenced key part remains alongside the label or in an accessible tooltip, so identical labels are distinguished by key. NULL uses a localized empty-relation state; long labels are visually truncated with their full value in `title`. Resolution failures leave the main list and raw FK values usable. Without `read` on a referenced resource, the frontend sends no related requests and receives no labels/metadata through schema.
+
+`reverse_relations` produce generic read-only child panels on the parent record form/detail. The detail requires only `read`, not `update`, and exposes no editable or save controls. Each panel uses the existing records list endpoint with typed `eq` filters for every child local column, including every part of a composite relation. A reverse panel is hidden without a query when its parent key type has no existing `eq` filter support in this stage. Independent pagination uses the same `page`/`limit`/`has_next` contract. Child keys and primary fields use the existing safe formatting helpers. Loading, empty, 401, 403 and error states are isolated to their panel and do not affect the parent form or other panels. An unsaved parent shows **Save the record first**, and no child query runs without a complete parent key. Switching ru/en preserves pagination and form values.
+
+Permission matrix: `read` only on the parent opens the parent and hides child panels/related labels; `read` on parent and child permits child records and labels; `read` only on the referenced resource does not open the current relation resolve endpoint. The backend independently enforces the same grants for schema, resolve and records list. Every operation uses the read pool and creates no audit events. Panels contain no create/edit/delete controls or nested record forms. Nested mutations, creating child records from a parent form and a many-to-many editor are not implemented.
 
 ## POST /api/resources/{schema}/{resource}/records
 

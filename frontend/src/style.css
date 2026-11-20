@@ -827,6 +827,166 @@ textarea:disabled {
   margin-top: 6px;
 }
 
+.related-record-cell {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  max-width: 320px;
+}
+
+.related-record-label,
+.related-record-cell code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.related-record-label {
+  color: var(--color-brand-primary);
+  font-weight: 600;
+}
+
+.related-record-raw {
+  overflow-wrap: anywhere;
+}
+
+.null-relation {
+  color: var(--color-text-secondary);
+  font-style: italic;
+}
+
+.reverse-relations {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+  margin-top: 28px;
+  padding-top: 24px;
+  border-top: 1px solid var(--color-border);
+}
+
+.reverse-relations-heading h3,
+.reverse-relation-heading h4 {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.reverse-relation-save-first {
+  margin: 0;
+  padding: 16px;
+  color: var(--color-text-secondary);
+  background: var(--color-surface-subtle);
+  border: 1px dashed var(--color-border);
+  border-radius: 6px;
+}
+
+.reverse-relation-panel {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+  padding: 18px;
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+
+.reverse-relation-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.reverse-relation-heading > div {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.reverse-relation-state {
+  margin: 0;
+  padding: 16px;
+  color: var(--color-text-secondary);
+  background: var(--color-surface);
+  border-radius: 6px;
+  text-align: center;
+}
+
+.reverse-relation-error {
+  color: var(--color-error);
+  background: var(--color-error-background);
+  border: 1px solid var(--color-error-border);
+}
+
+.reverse-relation-error p {
+  margin: 6px 0 12px;
+}
+
+.reverse-relation-records {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.reverse-relation-records > li {
+  min-width: 0;
+  padding: 14px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+}
+
+.reverse-relation-key {
+  display: block;
+  margin-bottom: 12px;
+  color: var(--color-brand-primary);
+  font-weight: 600;
+}
+
+.reverse-relation-records dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 20px;
+  margin: 0;
+}
+
+.reverse-relation-records dl > div {
+  min-width: 0;
+}
+
+.reverse-relation-records dt {
+  margin-bottom: 4px;
+  color: var(--color-text-secondary);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.reverse-relation-records dd {
+  margin: 0;
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}
+
+.reverse-relation-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--color-text-secondary);
+  font-size: 0.8rem;
+}
+
+.reverse-relation-pagination label,
+.reverse-relation-pagination > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .record-form-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1571,6 +1731,23 @@ textarea:disabled {
 
   .history-event-meta {
     display: grid;
+  }
+
+  .record-form-panel,
+  .reverse-relation-panel {
+    padding: 16px;
+  }
+
+  .reverse-relation-records dl {
+    grid-template-columns: 1fr;
+  }
+
+  .reverse-relation-pagination > div {
+    width: 100%;
+  }
+
+  .reverse-relation-pagination > div .secondary-button {
+    flex: 1;
   }
 
   .login-layout {

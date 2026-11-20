@@ -16,6 +16,7 @@ export interface ResourceMetadata {
   columns: ColumnMetadata[]
   primary_key: string[]
   foreign_keys: ForeignKeyMetadata[]
+  reverse_relations?: ReverseRelationMetadata[]
 }
 
 export interface ColumnMetadata {
@@ -35,6 +36,14 @@ export interface ForeignKeyMetadata {
   columns: string[]
   referenced_schema: string
   referenced_table: string
+  referenced_columns: string[]
+}
+
+export interface ReverseRelationMetadata {
+  name: string
+  schema: string
+  resource: string
+  columns: string[]
   referenced_columns: string[]
 }
 
@@ -79,6 +88,17 @@ function isForeignKey(value: unknown): value is ForeignKeyMetadata {
   )
 }
 
+function isReverseRelation(value: unknown): value is ReverseRelationMetadata {
+  if (!isRecord(value)) return false
+  return (
+    typeof value.name === 'string' &&
+    typeof value.schema === 'string' &&
+    typeof value.resource === 'string' &&
+    isStringArray(value.columns) &&
+    isStringArray(value.referenced_columns)
+  )
+}
+
 function isResource(value: unknown): value is ResourceMetadata {
   if (!isRecord(value)) return false
   return (
@@ -88,7 +108,9 @@ function isResource(value: unknown): value is ResourceMetadata {
     value.columns.every(isColumn) &&
     isStringArray(value.primary_key) &&
     Array.isArray(value.foreign_keys) &&
-    value.foreign_keys.every(isForeignKey)
+    value.foreign_keys.every(isForeignKey) &&
+    (value.reverse_relations === undefined ||
+      Array.isArray(value.reverse_relations) && value.reverse_relations.every(isReverseRelation))
   )
 }
 

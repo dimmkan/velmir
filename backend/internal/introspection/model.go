@@ -16,11 +16,12 @@ type Schema struct {
 }
 
 type Resource struct {
-	Name        string       `json:"name"`
-	Kind        string       `json:"kind"`
-	Columns     []Column     `json:"columns"`
-	PrimaryKey  []string     `json:"primary_key"`
-	ForeignKeys []ForeignKey `json:"foreign_keys"`
+	Name             string            `json:"name"`
+	Kind             string            `json:"kind"`
+	Columns          []Column          `json:"columns"`
+	PrimaryKey       []string          `json:"primary_key"`
+	ForeignKeys      []ForeignKey      `json:"foreign_keys"`
+	ReverseRelations []ReverseRelation `json:"reverse_relations"`
 }
 
 type Column struct {
@@ -40,6 +41,14 @@ type ForeignKey struct {
 	Columns           []string `json:"columns"`
 	ReferencedSchema  string   `json:"referenced_schema"`
 	ReferencedTable   string   `json:"referenced_table"`
+	ReferencedColumns []string `json:"referenced_columns"`
+}
+
+type ReverseRelation struct {
+	Name              string   `json:"name"`
+	Schema            string   `json:"schema"`
+	Resource          string   `json:"resource"`
+	Columns           []string `json:"columns"`
 	ReferencedColumns []string `json:"referenced_columns"`
 }
 
@@ -115,11 +124,12 @@ func buildCatalog(objects []objectRow, columns []columnRow, primaryKeys []primar
 		resourceKey := object.Schema + "\x00" + object.Name
 		resourceIndexes[resourceKey] = len(catalog.Schemas[schemaIndex].Resources)
 		catalog.Schemas[schemaIndex].Resources = append(catalog.Schemas[schemaIndex].Resources, Resource{
-			Name:        object.Name,
-			Kind:        object.Kind,
-			Columns:     make([]Column, 0),
-			PrimaryKey:  make([]string, 0),
-			ForeignKeys: make([]ForeignKey, 0),
+			Name:             object.Name,
+			Kind:             object.Kind,
+			Columns:          make([]Column, 0),
+			PrimaryKey:       make([]string, 0),
+			ForeignKeys:      make([]ForeignKey, 0),
+			ReverseRelations: make([]ReverseRelation, 0),
 		})
 	}
 

@@ -89,6 +89,7 @@ func NewRouter(adminDatabase, targetDatabase databasePinger, inspector schemaIns
 		r.With(requireCSRF).Post("/api/auth/logout", logout(authService, secureCookies))
 		r.With(requireAnyPermission(authorization.Read)).Get("/api/schema", schema(inspector, writer != nil))
 		r.With(requireResourcePermission(authorization.Read)).Get("/api/resources/{schema}/{resource}/records", listRecords(inspector, lister))
+		r.With(requireResourcePermission(authorization.Read)).Post("/api/resources/{schema}/{resource}/relations/resolve", resolveRelations(inspector, lister))
 		r.With(requireResourcePermission(authorization.Read)).Get("/api/resources/{schema}/{resource}/records/{key}/history", recordHistory(inspector, auditStore))
 		r.With(requireCSRF, requireResourcePermission(authorization.Create)).Post("/api/resources/{schema}/{resource}/records", createRecord(inspector, writer, auditStore))
 		r.With(requireCSRF, requireResourcePermission(authorization.Update)).Patch("/api/resources/{schema}/{resource}/records/{key}", updateRecord(inspector, writer, auditStore))
@@ -172,10 +173,36 @@ func filterReadableCatalog(catalog introspection.Catalog, permissions authorizat
 				continue
 			}
 			resource.ForeignKeys = filterReadableForeignKeys(resource.ForeignKeys, permissions)
+			resource.ReverseRelations = make([]introspection.ReverseRelation, 0)
 			schemaCopy.Resources = append(schemaCopy.Resources, resource)
 		}
 		if len(schemaCopy.Resources) > 0 {
 			filtered.Schemas = append(filtered.Schemas, schemaCopy)
+		}
+	}
+	for _, schema := range filtered.Schemas {
+		for _, child := range schema.Resources {
+			for _, foreignKey := range child.ForeignKeys {
+				for parentSchemaIndex := range filtered.Schemas {
+					parentSchema := &filtered.Schemas[parentSchemaIndex]
+					if parentSchema.Name != foreignKey.ReferencedSchema {
+						continue
+					}
+					for parentIndex := range parentSchema.Resources {
+						parent := &parentSchema.Resources[parentIndex]
+						if parent.Name != foreignKey.ReferencedTable {
+							continue
+						}
+						parent.ReverseRelations = append(parent.ReverseRelations, introspection.ReverseRelation{
+							Name:              foreignKey.Name,
+							Schema:            schema.Name,
+							Resource:          child.Name,
+							Columns:           append([]string(nil), foreignKey.Columns...),
+							ReferencedColumns: append([]string(nil), foreignKey.ReferencedColumns...),
+						})
+					}
+				}
+			}
 		}
 	}
 	return filtered

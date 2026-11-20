@@ -2,7 +2,7 @@
 
 [English version](README_EN.md)
 
-Velmir — панель администрирования PostgreSQL, управляемая метаданными. На текущем этапе реализованы introspection схемы, универсальные списки записей с пагинацией, сортировкой, поиском и типизированными фильтрами, автоматические формы создания и редактирования с many-to-one relation selectors, удаление записей с подтверждением, история изменений через Velmir, аутентификация с серверными сессиями, RBAC и управление пользователями и ролями через UI. One-to-many panels, many-to-many editor, файлы и автоматизация пока не реализованы.
+Velmir — панель администрирования PostgreSQL, управляемая метаданными. На текущем этапе реализованы introspection схемы, универсальные списки записей с пагинацией, сортировкой, поиском и типизированными фильтрами, related labels, автоматические формы создания и редактирования с many-to-one relation selectors и read-only one-to-many panels, удаление записей с подтверждением, история изменений через Velmir, аутентификация с серверными сессиями, RBAC и управление пользователями и ролями через UI. Many-to-many editor, nested mutations, файлы и автоматизация пока не реализованы.
 
 ## Требования
 
@@ -114,7 +114,15 @@ Frontend строит все формы на основе `/api/schema`; фор�
 
 Label выбирается в порядке `display_name`, `name`, `title`, `label`, другое непустое текстовое поле, затем technical identifier; рядом показываются все части referenced key. Selector лишь заполняет существующие FK columns в прежнем POST/PATCH payload. Nullable relation можно очистить целиком, required — нельзя; частично заполненный composite FK не отправляется. Bigint/numeric и UUID сохраняют строковое представление, NULL остаётся JSON `null`.
 
-Без `read` на referenced resource related records и labels не запрашиваются: остаётся безопасный raw FK input, а доступная FK metadata не раскрывает скрытый ресурс. Read-only controls не позволяют менять связь. Nested mutations и автоматическое создание/редактирование связанных записей отсутствуют. One-to-many panels и many-to-many editor на этом этапе не реализованы. Подробности и RBAC filtering описаны в `docs/api.md`.
+Без `read` на referenced resource related records и labels не запрашиваются: остаётся безопасный raw FK input, а доступная FK metadata не раскрывает скрытый ресурс. Read-only controls не позволяют менять связь. Nested mutations и автоматическое создание/редактирование связанных записей отсутствуют.
+
+### Related labels и one-to-many panels
+
+В списках записей many-to-one FK отображаются через общий label helper: `display_name`, `name`, `title`, `label`, другое текстовое поле, затем technical identifier. Рядом сохраняются referenced key и все части composite key; NULL имеет локализованное состояние, а при ошибке остаётся raw FK. Read-only `POST /api/resources/{schema}/{resource}/relations/resolve` группирует дедуплицированные ключи по relations и не требует CSRF, writer или audit. Лимиты — 256 КиБ, 20 relations, 200 keys на relation и 1000 суммарно. Per-row запросы не выполняются.
+
+`/api/schema` дополнительно возвращает RBAC-filtered `reverse_relations` с constraint name, child schema/resource и упорядоченными local/referenced columns. На parent form/detail они открывают generic read-only child panels с typed filters по всем частям simple/composite key, отдельной pagination и независимыми loading/empty/401/403/error states. Detail доступен по `read` без save controls; reverse relations с типами, для которых records API не имеет `eq` filter, пока скрываются без запроса. Несохранённый parent показывает **Сначала сохраните запись** и не запускает child query. Панели не содержат create/edit/delete controls и не сбрасывают parent values или pagination при смене языка.
+
+Права проверяются backend и frontend независимо: read только на parent скрывает labels/panels; read на parent и child разрешает их; read только на referenced resource не открывает resolve для недоступного current resource. Пользователь без session получает 401, authenticated без permission — 403 без login redirect. Подробный batch contract, reverse metadata и permission matrix приведены в `docs/api.md`. Many-to-many editor, создание дочерних записей из parent form и nested mutations не реализованы.
 
 После сохранения текущий список записей обновляется. Формы предупреждают о несохранённых изменениях перед закрытием или уходом со страницы. При конкурентных обновлениях сейчас действует семантика **last write wins**; optimistic locking и обнаружение конфликтов не реализованы.
 

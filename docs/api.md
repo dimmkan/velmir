@@ -144,6 +144,8 @@
 
 `kind` принимает значение `table` или `view`. `default` равен `null`, если значение по умолчанию отсутствует. `primary_key` отмечает ключевой столбец. `identity` — пустая строка, `always` или `by_default`; `generated` отмечает сгенерированные столбцы. `editable` истинен только для поддерживаемых несгенерированных столбцов таблицы (`always` identity не редактируется). `enum_values` содержит допустимые метки enum-типов и пуст в остальных случаях. Составные первичные и внешние ключи сохраняют порядок столбцов. Пустые коллекции возвращаются как массивы.
 
+Каждый resource также содержит `reverse_relations` — one-to-many metadata, вычисленную из тех же introspected FK без дополнительных объектов в target schema. Элемент содержит constraint `name`, дочерние `schema`/`resource`, дочерние local `columns` и parent `referenced_columns` в соответствующем порядке. Например, для `authors` связь имеет `{"name":"books_author_id_fkey","schema":"public","resource":"books","columns":["author_id"],"referenced_columns":["id"]}`. Reverse relations создаются только после RBAC-фильтрации: ресурсы без `read`, их FK и имена недоступных child resources не включаются и не раскрываются.
+
 `write_enabled` истинен только когда настроен необязательный write pool и текущий пользователь имеет хотя бы одно право `create`, `update` или `delete`. Флаг не гарантирует возможность записи в каждый ресурс или столбец; для controls frontend дополнительно использует effective permissions.
 
 Если target database не настроена, endpoint возвращает HTTP 503:
@@ -253,6 +255,44 @@ HTTP 200:
 
 Запросы записей и интроспекции имеют backend timeout 10 секунд и используют контекст запроса, поэтому отмена клиентом передаётся в PostgreSQL.
 
+## POST /api/resources/{schema}/{resource}/relations/resolve
+
+Read-only batch endpoint для related labels в списке записей. Несмотря на POST, он не изменяет состояние: CSRF не требуется, writer DSN и audit не используются. Требуются session, `read` на текущий resource из пути и `read` на каждый referenced resource. Отсутствие session возвращает 401, отсутствие любого права — 403 `FORBIDDEN` без login redirect и без раскрытия имени недоступного ресурса.
+
+Тело запроса содержит known FK relations и ключи-объекты ровно с referenced columns:
+
+```json
+{
+  "relations": [
+    {
+      "name": "books_author_id_fkey",
+      "keys": [{"id":"9223372036854775807"}, {"id":null}]
+    },
+    {
+      "name": "children_parent_fk",
+      "keys": [{"tenant_id":"7", "external_id":"00112233-4455-6677-8899-aabbccddeeff"}]
+    }
+  ]
+}
+```
+
+Поддерживаются simple/composite keys. Bigint/numeric передаются строками, UUID — canonical string; integer JSON numbers также принимаются. Ключи дедуплицируются внутри relation, а ключ с `null` хотя бы в одной части пропускается. Пустой `keys` или только NULL-ключи возвращают пустой `records` без SQL-запроса. Лимиты: тело до 256 КиБ, не более 20 relations, 200 входных keys на relation и 1000 входных keys суммарно. Duplicate relation names, unknown relation/column/resource, лишние или отсутствующие части ключа и неверные типы отклоняются с HTTP 400 `INVALID_RELATION_RESOLVE`.
+
+Ответ сохраняет порядок relations:
+
+```json
+{
+  "relations": [
+    {
+      "name": "books_author_id_fkey",
+      "records": [{"id":"9223372036854775807", "name":"Author"}]
+    }
+  ]
+}
+```
+
+Для каждой relation выполняется один parameterized SELECT через read-only target pool, независимо от числа ключей. Schema, resource, relation и columns проверяются по свежему metadata allowlist; identifiers quoting, произвольный SQL не принимается. Выбираются только referenced key, PK и текстовые поля, необходимые общему display label helper. Формат значений совпадает с records API, включая точные bigint/numeric, UUID, JSON/JSONB и Base64 bytea для выбранных ключевых полей. Ошибка запроса возвращает HTTP 500 `RELATION_RESOLVE_FAILED` без SQL или stack traces.
+
 ## Many-to-one selectors в формах записей
 
 Frontend использует существующие `foreign_keys` из `/api/schema` без отдельной конфигурации ресурсов. Для каждого many-to-one FK учитываются упорядоченные `columns`, `referenced_schema`, `referenced_table`, `referenced_columns`, а также `nullable` и `editable` локальных столбцов. Simple FK заменяется одним selector; все части composite FK объединяются в один логический selector. Если столбец нельзя редактировать или это PK при update, сохраняется read-only/raw control.
@@ -265,7 +305,13 @@ Selector заполняет только существующие локальн
 
 Referenced records запрашиваются только при наличии `read` на referenced resource и его metadata в авторизованном `/api/schema`. Иначе related requests и labels отсутствуют; остаётся существующий raw FK input, а если FK metadata известна, но referenced resource недоступен, показывается локализованное пояснение без technical internals. Backend по-прежнему полностью исключает FK на недоступный ресурс из `/api/schema`, поэтому такая фильтрация сама по себе не раскрывает referenced resource. Read-only controls не допускают изменения selector; `create`, `update` и `delete` остаются отдельными backend permissions.
 
-На этом этапе отсутствуют one-to-many panels и many-to-many editor. Этот frontend behavior не меняет публичные API contracts.
+## Related labels и read-only one-to-many panels
+
+В `RecordsTable` many-to-one FK cells используют тот же общий display label helper, что и selectors. Один batch resolve на группу relations заменяет per-row/per-key HTTP-запросы; повторяющиеся FK values дедуплицируются. Рядом или в accessible tooltip остаются все referenced key parts, поэтому одинаковые labels различаются по ключу. NULL показывается локализованным empty relation, длинные labels обрезаются визуально с полным `title`. При ошибке resolution основной список и raw FK values остаются доступными. Без `read` на referenced resource frontend не отправляет related requests и не получает labels/metadata через schema.
+
+На parent record form/detail `reverse_relations` порождают generic read-only child panels. Detail доступен по `read` даже без `update`; в нём нет editable или save controls. Каждая панель использует существующий records list endpoint с typed `eq` filters по всем child local columns, включая каждую часть composite relation. Если тип parent key не поддерживает существующий `eq` filter, такая reverse panel на этом этапе скрывается и запрос не выполняется. Отдельная pagination использует тот же `page`/`limit`/`has_next` contract. Child key и основные поля форматируются существующими safe helpers; loading, empty, 401, 403 и error states изолированы внутри конкретной панели и не затрагивают parent form или другие панели. Для несохранённой parent record показывается **Save the record first**, child query без полного parent key не выполняется. Переключение ru/en не меняет pagination и значения формы.
+
+Матрица прав: `read` только на parent открывает parent и скрывает child panels/related labels; `read` на parent и child разрешает child records и labels; `read` только на referenced resource не открывает current relation resolve. Backend независимо проверяет те же права для schema, resolve и records list. Все операции используют read pool, audit events не создаются. В panels нет create/edit/delete controls и nested record forms. Nested mutations, создание дочерних записей из parent form и many-to-many editor не реализованы.
 
 ## POST /api/resources/{schema}/{resource}/records
 

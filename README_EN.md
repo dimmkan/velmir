@@ -2,7 +2,7 @@
 
 [Русская версия](README.md)
 
-Velmir is a metadata-driven PostgreSQL admin panel. The current stage provides schema introspection, universal record lists with pagination, sorting, search and typed filters, automatic forms with many-to-one relation selectors for creating and editing records, confirmed record deletion, change history for changes made through Velmir, server-side session authentication, RBAC and user/role management UI. One-to-many panels, a many-to-many editor, files and automation are not implemented.
+Velmir is a metadata-driven PostgreSQL admin panel. The current stage provides schema introspection, universal record lists with pagination, sorting, search and typed filters, related labels, automatic forms with many-to-one relation selectors and read-only one-to-many panels, confirmed record deletion, change history for changes made through Velmir, server-side session authentication, RBAC and user/role management UI. A many-to-many editor, nested mutations, files and automation are not implemented.
 
 ## Requirements
 
@@ -114,7 +114,15 @@ When the user has `read` on the referenced resource, forms generically replace r
 
 Display labels use `display_name`, `name`, `title`, `label`, another non-empty text field, then the technical identifier, with every referenced key part shown alongside. The selector only fills existing FK columns in the unchanged POST/PATCH payload. A nullable relation can be cleared as a whole, a required one cannot, and a partially populated composite FK is never submitted. Bigint/numeric and UUID values retain their string representation, and NULL remains JSON `null`.
 
-Without `read` on the referenced resource, related records and labels are not requested: the safe raw FK input remains, and available FK metadata does not expose the hidden resource. Read-only controls cannot change the relation. There are no nested mutations or automatic related-record creation/editing. One-to-many panels and a many-to-many editor are not included at this stage. See `docs/api_en.md` for details and RBAC filtering.
+Without `read` on the referenced resource, related records and labels are not requested: the safe raw FK input remains, and available FK metadata does not expose the hidden resource. Read-only controls cannot change the relation. There are no nested mutations or automatic related-record creation/editing.
+
+### Related labels and one-to-many panels
+
+Many-to-one FKs in record lists use the shared label helper: `display_name`, `name`, `title`, `label`, another text field, then the technical identifier. The referenced key and every composite key part remain visible; NULL has a localized state, and failures retain the raw FK. Read-only `POST /api/resources/{schema}/{resource}/relations/resolve` batches deduplicated keys by relation and requires neither CSRF, a writer nor audit. Limits are 256 KiB, 20 relations, 200 keys per relation and 1000 in total. No per-row requests are made.
+
+`/api/schema` also returns RBAC-filtered `reverse_relations` with the constraint name, child schema/resource and ordered local/referenced columns. Parent forms/details use them for generic read-only child panels with typed filters for every simple/composite key part, independent pagination and isolated loading/empty/401/403/error states. Details require only `read` and have no save controls; reverse relations whose types lack an existing `eq` records filter are currently hidden without a query. An unsaved parent shows **Save the record first** and runs no child query. Panels have no create/edit/delete controls and preserve parent values and pagination when the language changes.
+
+Backend and frontend independently enforce permissions: read only on the parent hides labels/panels; read on parent and child enables them; read only on the referenced resource does not enable resolve for an inaccessible current resource. No session returns 401, while an authenticated user without permission receives 403 without a login redirect. See `docs/api_en.md` for the full batch contract, reverse metadata and permission matrix. A many-to-many editor, creating child records from a parent form and nested mutations are not implemented.
 
 After saving, the current record list is refreshed. Forms warn about unsaved changes before closing or leaving the page. Concurrent updates currently have **last write wins** semantics; optimistic locking and conflict detection are not implemented.
 

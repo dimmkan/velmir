@@ -18,6 +18,8 @@ import { buildRecordKey, createRecord, MutationRequestError, updateRecord } from
 import type { ColumnMetadata, ForeignKeyMetadata, ResourceMetadata, SchemaMetadata } from './schema'
 import { findReferencedResource } from './relation'
 import RelationSelector from './RelationSelector.vue'
+import ReverseRelationPanel from './ReverseRelationPanel.vue'
+import { readableReverseRelations } from './relatedRecords'
 import { errorTranslationKey, fieldErrorTranslationKey } from './i18n'
 
 interface RelationView {
@@ -30,14 +32,15 @@ type FormEntry =
   | { key: string; kind: 'relation'; relation: RelationView }
   | { key: string; kind: 'column'; column: ColumnMetadata }
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   backendBaseURL: string
   schemaName: string
   resource: ResourceMetadata
   schemas?: SchemaMetadata[]
   mode: FormMode
   record?: RecordRow
-}>()
+  updateAllowed?: boolean
+}>(), { updateAllowed: true })
 const emit = defineEmits<{
   saved: [record: RecordRow]
   'audit-failed': [record: RecordRow | null]
@@ -56,6 +59,7 @@ const serverErrorStatus = ref(0)
 const fieldErrors = ref<Record<string, string>>({})
 
 const dirty = computed(() => isFormDirty(state.value, initial))
+const formReadOnly = computed(() => props.mode === 'edit' && props.updateAllowed === false)
 
 const resolvedRelations = computed(() => {
   const relations: RelationView[] = []
@@ -72,6 +76,8 @@ const resolvedRelations = computed(() => {
   }
   return relations
 })
+
+const reverseRelations = computed(() => readableReverseRelations(props.resource, props.schemas ?? []))
 
 const formEntries = computed<FormEntry[]>(() => {
   const byFirstColumn = new Map(resolvedRelations.value.map((relation) => [relation.foreignKey.columns[0], relation]))
@@ -135,10 +141,11 @@ function inputPlaceholder(column: ColumnMetadata): string {
 }
 
 function isReadOnly(column: ColumnMetadata): boolean {
-  return !column.editable || (props.mode === 'edit' && column.primary_key)
+  return formReadOnly.value || !column.editable || (props.mode === 'edit' && column.primary_key)
 }
 
 function readOnlyText(column: ColumnMetadata): string {
+  if (formReadOnly.value) return formatRecordValue(props.record?.[column.name], column.data_type, locale.value)
   if (column.generated) return t('form.generated')
   if (column.identity === 'always') return t('form.generatedIdentity')
   if (column.primary_key && props.mode === 'edit') return formatRecordValue(props.record?.[column.name], column.data_type, locale.value)
@@ -211,6 +218,7 @@ function relationError(relation: RelationView): string {
 }
 
 async function save() {
+  if (formReadOnly.value) return
   serverError.value = ''
   serverErrorCode.value = ''
   serverErrorStatus.value = 0
@@ -278,10 +286,10 @@ function baseType(dataType: string): string {
 </script>
 
 <template>
-  <section class="record-form-panel" :aria-label="t(mode === 'create' ? 'records.create' : 'records.edit')">
+  <section class="record-form-panel" :aria-label="t(mode === 'create' ? 'records.create' : formReadOnly ? 'common.view' : 'records.edit')">
     <div class="record-form-heading">
       <div>
-        <p class="eyebrow">{{ t(mode === 'create' ? 'records.new' : 'records.edit') }}</p>
+        <p class="eyebrow">{{ t(mode === 'create' ? 'records.new' : formReadOnly ? 'common.view' : 'records.edit') }}</p>
         <h3>{{ resource.name }}</h3>
       </div>
       <button type="button" class="form-close" :aria-label="t('form.close')" @click="cancel">×</button>
@@ -402,12 +410,31 @@ function baseType(dataType: string): string {
       </template>
 
       <div class="record-form-actions">
-        <button type="submit" class="primary-button" :disabled="saving || (mode === 'edit' && !dirty)">
+        <button v-if="!formReadOnly" type="submit" class="primary-button" :disabled="saving || (mode === 'edit' && !dirty)">
           {{ saving ? t('records.saving') : t(mode === 'create' ? 'records.create' : 'records.save') }}
         </button>
-        <button type="button" class="secondary-button" :disabled="saving" @click="cancel">{{ t('common.cancel') }}</button>
+        <button type="button" class="secondary-button" :disabled="saving" @click="cancel">{{ t(formReadOnly ? 'common.close' : 'common.cancel') }}</button>
         <span v-if="dirty" class="unsaved-label">{{ t('form.unsaved') }}</span>
       </div>
     </form>
+
+    <section v-if="reverseRelations.length" class="reverse-relations" :aria-label="t('relation.childRecords')">
+      <div class="reverse-relations-heading">
+        <p class="eyebrow">{{ t('relation.relatedRecords') }}</p>
+        <h3>{{ t('relation.childRecords') }}</h3>
+      </div>
+      <p v-if="mode === 'create'" class="reverse-relation-save-first" role="status">
+        {{ t('relation.saveRecordFirst') }}
+      </p>
+      <ReverseRelationPanel
+        v-else
+        v-for="item in reverseRelations"
+        :key="`${item.relation.schema}.${item.relation.resource}.${item.relation.name}`"
+        :backend-base-u-r-l="backendBaseURL"
+        :relation="item.relation"
+        :child-resource="item.childResource"
+        :parent-record="record"
+      />
+    </section>
   </section>
 </template>

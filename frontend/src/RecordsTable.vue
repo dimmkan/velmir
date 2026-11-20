@@ -24,6 +24,13 @@ import RecordDeleteDialog from './RecordDeleteDialog.vue'
 import { canCreateRecord, canUpdateRecord, type FormMode } from './recordForm'
 import { buildRecordKey, deleteRecord, MutationRequestError } from './mutations'
 import type { RecordRow } from './records'
+import {
+  buildRelatedRelationPlans,
+  fetchRelatedLabels,
+  localRelationKey,
+} from './relatedRecords'
+import type { ForeignKeyMetadata } from './schema'
+import type { RelationOption } from './relation'
 
 const props = defineProps<{
   backendBaseURL: string
@@ -60,8 +67,12 @@ const deleteTarget = ref<RecordRow | null>(null)
 const deleting = ref(false)
 const deleteErrorMessage = ref('')
 const deleteSuccess = ref(false)
+const relatedLabels = ref<Map<string, Map<string, RelationOption>>>(new Map())
+const relatedLabelsLoading = ref(false)
+const relatedLabelsFailed = ref(false)
 
 let controller: AbortController | null = null
+let relatedController: AbortController | null = null
 let requestID = 0
 let timeout = 0
 
@@ -79,7 +90,29 @@ const canCreate = computed(() => canCreateRecord(props.writeEnabled, props.resou
 const canUpdate = computed(() => canUpdateRecord(props.writeEnabled, props.resource, props.updateAllowed))
 const canDelete = computed(() => props.writeEnabled && props.deleteAllowed && props.resource.kind === 'table' && props.resource.primary_key.length > 0)
 const canViewHistory = computed(() => props.readAllowed && props.resource.primary_key.length > 0)
+const canViewDetails = computed(() => props.readAllowed)
 const hasMutationPermission = computed(() => props.createAllowed || props.updateAllowed || props.deleteAllowed)
+
+function relationForColumn(columnName: string): ForeignKeyMetadata | null {
+  return props.resource.foreign_keys.find((relation) => relation.columns[0] === columnName) ?? null
+}
+
+function relationIsNull(relation: ForeignKeyMetadata, record: RecordRow): boolean {
+  return relation.columns.every((column) => record[column] === null || record[column] === undefined)
+}
+
+function relatedOption(relation: ForeignKeyMetadata, record: RecordRow): RelationOption | undefined {
+  return relatedLabels.value.get(relation.name)?.get(localRelationKey(relation, record))
+}
+
+function relatedCellTitle(relation: ForeignKeyMetadata, record: RecordRow): string {
+  if (relationIsNull(relation, record)) return t('relation.emptyRelation')
+  const option = relatedOption(relation, record)
+  if (option) return t('relation.relatedRecordTitle', { label: option.label, key: option.keyLabel })
+  if (relatedLabelsLoading.value) return t('relation.loading')
+  if (relatedLabelsFailed.value) return t('relation.rawFallback')
+  return t('relation.unavailableLabel')
+}
 
 function openCreateForm() {
   historyKey.value = ''
@@ -211,6 +244,7 @@ function commit(next: RecordsQueryState) {
 async function loadRecords() {
   const currentRequest = ++requestID
   controller?.abort()
+  relatedController?.abort()
   controller = new AbortController()
   window.clearTimeout(timeout)
   timeout = window.setTimeout(() => controller?.abort(), 12000)
@@ -219,6 +253,9 @@ async function loadRecords() {
   errorCode.value = ''
   errorStatus.value = 0
   result.value = null
+  relatedLabels.value = new Map()
+  relatedLabelsLoading.value = false
+  relatedLabelsFailed.value = false
 
   try {
     const response = await fetchRecords(
@@ -228,7 +265,10 @@ async function loadRecords() {
       state.value,
       controller.signal,
     )
-    if (currentRequest === requestID) result.value = response
+    if (currentRequest === requestID) {
+      result.value = response
+      void loadRelatedLabels(response.records, currentRequest)
+    }
   } catch (error) {
     if (currentRequest !== requestID) return
     if (error instanceof RecordsRequestError) {
@@ -243,6 +283,30 @@ async function loadRecords() {
   } finally {
     window.clearTimeout(timeout)
     if (currentRequest === requestID) loading.value = false
+  }
+}
+
+async function loadRelatedLabels(records: RecordRow[], currentRequest: number) {
+  const plans = buildRelatedRelationPlans(props.resource, records, props.schemas ?? [])
+  if (plans.length === 0 || plans.every((plan) => plan.keys.length === 0)) return
+  relatedController = new AbortController()
+  const relatedTimeout = window.setTimeout(() => relatedController?.abort(), 12000)
+  relatedLabelsLoading.value = true
+  try {
+    const labels = await fetchRelatedLabels(
+      props.backendBaseURL,
+      props.schemaName,
+      props.resource.name,
+      plans,
+      relatedController.signal,
+    )
+    if (currentRequest === requestID) relatedLabels.value = labels
+  } catch (error) {
+    if (currentRequest !== requestID || error instanceof DOMException && error.name === 'AbortError') return
+    relatedLabelsFailed.value = true
+  } finally {
+    window.clearTimeout(relatedTimeout)
+    if (currentRequest === requestID) relatedLabelsLoading.value = false
   }
 }
 
@@ -304,6 +368,7 @@ onMounted(() => window.addEventListener('popstate', syncFromURL))
 onBeforeUnmount(() => {
   window.removeEventListener('popstate', syncFromURL)
   controller?.abort()
+  relatedController?.abort()
   window.clearTimeout(timeout)
 })
 </script>
@@ -326,6 +391,7 @@ onBeforeUnmount(() => {
       :schemas="schemas ?? []"
       :mode="formMode"
       :record="activeRecord"
+      :update-allowed="canUpdate"
       @saved="recordSaved"
       @audit-failed="recordAuditFailed"
       @cancel="closeForm"
@@ -441,7 +507,7 @@ onBeforeUnmount(() => {
               <span v-else>{{ column.name }}</span>
               <small>{{ column.data_type }}</small>
             </th>
-            <th v-if="canUpdate || canViewHistory || canDelete">{{ t('records.actions') }}</th>
+            <th v-if="canUpdate || canViewDetails || canViewHistory || canDelete">{{ t('records.actions') }}</th>
           </tr>
         </thead>
         <tbody>
@@ -450,10 +516,29 @@ onBeforeUnmount(() => {
               v-for="column in resource.columns"
               :key="column.name"
               :class="{ 'null-value': record[column.name] === null, 'json-value': typeof record[column.name] === 'object' && record[column.name] !== null }"
-            >{{ formatRecordValue(record[column.name], column.data_type, locale) }}</td>
-            <td v-if="canUpdate || canViewHistory || canDelete" class="record-action-cell">
+            >
+              <div
+                v-if="relationForColumn(column.name)"
+                class="related-record-cell"
+                :title="relatedCellTitle(relationForColumn(column.name)!, record)"
+                :aria-label="relatedCellTitle(relationForColumn(column.name)!, record)"
+              >
+                <span v-if="relationIsNull(relationForColumn(column.name)!, record)" class="null-relation">
+                  {{ t('relation.emptyRelation') }}
+                </span>
+                <template v-else-if="relatedOption(relationForColumn(column.name)!, record)">
+                  <span class="related-record-label">{{ relatedOption(relationForColumn(column.name)!, record)!.label }}</span>
+                  <code v-if="relatedOption(relationForColumn(column.name)!, record)!.label !== relatedOption(relationForColumn(column.name)!, record)!.keyLabel">
+                    {{ relatedOption(relationForColumn(column.name)!, record)!.keyLabel }}
+                  </code>
+                </template>
+                <span v-else class="related-record-raw">{{ formatRecordValue(record[column.name], column.data_type, locale) }}</span>
+              </div>
+              <template v-else>{{ formatRecordValue(record[column.name], column.data_type, locale) }}</template>
+            </td>
+            <td v-if="canUpdate || canViewDetails || canViewHistory || canDelete" class="record-action-cell">
               <div class="record-row-actions">
-                <button v-if="canUpdate" type="button" class="secondary-button" @click="openEditForm(record)">{{ t('common.edit') }}</button>
+                <button v-if="canUpdate || canViewDetails" type="button" class="secondary-button record-details-button" @click="openEditForm(record)">{{ t(canUpdate ? 'common.edit' : 'common.view') }}</button>
                 <button v-if="canViewHistory" type="button" class="secondary-button" @click="openHistory(record)">{{ t('history.open') }}</button>
                 <button
                   v-if="canDelete"
