@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 
 	"velmir/backend/internal/audit"
@@ -66,7 +67,8 @@ func run(logger *slog.Logger) error {
 	}
 	cancelStartup()
 
-	authService, err := auth.NewService(auth.NewStore(adminDatabase), cfg.SessionIdleTimeout, cfg.SessionAbsoluteTimeout)
+	authStore := auth.NewStore(adminDatabase)
+	authService, err := auth.NewService(authStore, cfg.SessionIdleTimeout, cfg.SessionAbsoluteTimeout)
 	if err != nil {
 		return fmt.Errorf("initialize authentication: %w", err)
 	}
@@ -90,6 +92,8 @@ func run(logger *slog.Logger) error {
 	} else {
 		logger.Info("frontend static serving is disabled; use the Vite development server")
 	}
+	handler = httpapi.TrustedProxyHeaders(handler, cfg.TrustedProxies)
+	handler = httpapi.SecurityHeaders(handler, cfg.AppEnv == config.Production)
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           handler,
@@ -102,6 +106,17 @@ func run(logger *slog.Logger) error {
 
 	signalContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	maintenanceContext, cancelMaintenance := context.WithCancel(signalContext)
+	var maintenance sync.WaitGroup
+	maintenance.Add(1)
+	go func() {
+		defer maintenance.Done()
+		runMaintenance(maintenanceContext, authStore, authService, cfg.SessionCleanupInterval, cfg.SessionCleanupBatchSize, logger)
+	}()
+	defer func() {
+		cancelMaintenance()
+		maintenance.Wait()
+	}()
 	serverError := make(chan error, 1)
 	go func() {
 		serverError <- server.ListenAndServe()

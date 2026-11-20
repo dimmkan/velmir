@@ -106,3 +106,20 @@ func (s *PostgresStore) DeleteSession(ctx context.Context, tokenHash []byte) err
 	}
 	return nil
 }
+
+func (s *PostgresStore) CleanupExpiredSessions(ctx context.Context, now time.Time, batchSize int32) (int64, error) {
+	result, err := s.db.Exec(ctx, `
+		DELETE FROM sessions
+		WHERE token_hash IN (
+			SELECT token_hash
+			FROM sessions
+			WHERE expires_at <= $1 OR idle_expires_at <= $1
+			ORDER BY LEAST(expires_at, idle_expires_at)
+			LIMIT $2
+			FOR UPDATE SKIP LOCKED
+		)`, now, batchSize)
+	if err != nil {
+		return 0, fmt.Errorf("cleanup expired sessions: %w", err)
+	}
+	return result.RowsAffected(), nil
+}

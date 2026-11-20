@@ -1,0 +1,19 @@
+{
+	admin 127.0.0.1:2019
+	email {$VELMIR_ACME_EMAIL}
+	http_port {$VELMIR_PROXY_HTTP_PORT}
+	https_port {$VELMIR_PROXY_HTTPS_PORT}
+}
+
+http://{$VELMIR_DOMAIN}:{$VELMIR_PROXY_HTTP_PORT} {
+	redir https://{$VELMIR_DOMAIN}:{$VELMIR_PROXY_HTTPS_PORT}{uri} 308
+}
+
+{$VELMIR_DOMAIN} {
+	reverse_proxy app:8080 {
+		header_up Host {http.request.host}
+		header_up X-Forwarded-For {http.request.remote.host}
+		header_up X-Real-IP {http.request.remote.host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+}

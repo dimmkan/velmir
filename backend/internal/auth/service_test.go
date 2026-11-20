@@ -189,6 +189,27 @@ func TestSessionIdleAndAbsoluteExpiration(t *testing.T) {
 	}
 }
 
+func TestCleanupLoginAttempts(t *testing.T) {
+	service, err := NewService(newMemoryStore(), 15*time.Minute, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	service.now = func() time.Time { return now }
+	service.recordFailure("old@example.test", "192.0.2.1")
+	now = now.Add(16 * time.Minute)
+	service.recordFailure("recent@example.test", "192.0.2.2")
+	service.CleanupLoginAttempts()
+	if len(service.attempts) != 2 {
+		t.Fatalf("remaining attempt entries = %d, want 2", len(service.attempts))
+	}
+	now = now.Add(16 * time.Minute)
+	service.CleanupLoginAttempts()
+	if len(service.attempts) != 0 {
+		t.Fatalf("expired attempt entries remain: %d", len(service.attempts))
+	}
+}
+
 func TestLogoutRevokesOnlyCurrentSession(t *testing.T) {
 	store := newMemoryStore()
 	hash, err := HashPassword("a-long-test-password")

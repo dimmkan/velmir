@@ -45,6 +45,8 @@ services:
       VELMIR_BOOTSTRAP_ADMIN_DISPLAY_NAME: Demo Administrator
 
   app:
+    ports:
+      - "127.0.0.1:${VELMIR_HTTP_PORT:-8080}:8080"
     environment:
       ADMIN_DATABASE_URL: postgresql://velmir:velmir_local_only@admin-db:5432/velmir_admin?sslmode=disable
       APP_ENV: development

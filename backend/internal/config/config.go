@@ -37,6 +37,9 @@ type Config struct {
 	SessionCookieSecure       bool
 	SessionIdleTimeout        time.Duration
 	SessionAbsoluteTimeout    time.Duration
+	SessionCleanupInterval    time.Duration
+	SessionCleanupBatchSize   int32
+	TrustedProxies            TrustedProxies
 	DatabaseConnectTimeout    time.Duration
 	AdminDatabaseMaxConns     int32
 	TargetDatabaseMaxConns    int32
@@ -53,10 +56,34 @@ func Load() (Config, error) {
 		return Config{}, errors.New("TARGET_WRITE_DATABASE_URL is no longer supported; remove it and use TARGET_DATABASE_URL for both reads and supported mutations, with privileges granted by the target database owner")
 	}
 
-	adminDatabaseURL := os.Getenv("ADMIN_DATABASE_URL")
-	if adminDatabaseURL == "" {
-		return Config{}, errors.New("ADMIN_DATABASE_URL is required")
+	adminDatabaseURL, err := secretFromEnv("ADMIN_DATABASE_URL")
+	if err != nil {
+		return Config{}, err
 	}
+	if adminDatabaseURL == "" {
+		return Config{}, errors.New("ADMIN_DATABASE_URL or ADMIN_DATABASE_URL_FILE is required")
+	}
+	targetDatabaseURL, err := secretFromEnv("TARGET_DATABASE_URL")
+	if err != nil {
+		return Config{}, err
+	}
+	bootstrapPassword, err := secretFromEnv("VELMIR_BOOTSTRAP_ADMIN_PASSWORD")
+	if err != nil {
+		return Config{}, err
+	}
+	bootstrapLogin, err := secretFromEnv("VELMIR_BOOTSTRAP_ADMIN_LOGIN")
+	if err != nil {
+		return Config{}, err
+	}
+	legacyBootstrapLogin, err := secretFromEnv("VELMIR_BOOTSTRAP_ADMIN_EMAIL")
+	if err != nil {
+		return Config{}, err
+	}
+	trustedProxies, err := trustedProxiesFromEnv()
+	if err != nil {
+		return Config{}, err
+	}
+
 	appEnv := strings.ToLower(strings.TrimSpace(os.Getenv("APP_ENV")))
 	if appEnv == "" {
 		appEnv = Development
@@ -133,6 +160,14 @@ func Load() (Config, error) {
 	if sessionIdleTimeout <= 0 || sessionAbsoluteTimeout < sessionIdleTimeout {
 		return Config{}, errors.New("session timeouts must be positive and SESSION_ABSOLUTE_TIMEOUT must be at least SESSION_IDLE_TIMEOUT")
 	}
+	sessionCleanupInterval, err := durationFromEnv("SESSION_CLEANUP_INTERVAL", 15*time.Minute)
+	if err != nil || sessionCleanupInterval <= 0 {
+		return Config{}, errors.New("SESSION_CLEANUP_INTERVAL must be a positive Go duration")
+	}
+	sessionCleanupBatchSize, err := int32FromEnv("SESSION_CLEANUP_BATCH_SIZE", 1000)
+	if err != nil || sessionCleanupBatchSize <= 0 {
+		return Config{}, errors.New("SESSION_CLEANUP_BATCH_SIZE must be a positive integer")
+	}
 
 	databaseConnectTimeout, err := durationFromEnv("DATABASE_CONNECT_TIMEOUT", 5*time.Second)
 	if err != nil {
@@ -158,8 +193,8 @@ func Load() (Config, error) {
 		return Config{}, errors.New("TARGET_DATABASE_MAX_CONNS must be a positive integer")
 	}
 
-	login := strings.TrimSpace(os.Getenv("VELMIR_BOOTSTRAP_ADMIN_LOGIN"))
-	legacyLogin := strings.TrimSpace(os.Getenv("VELMIR_BOOTSTRAP_ADMIN_EMAIL"))
+	login := strings.TrimSpace(bootstrapLogin)
+	legacyLogin := strings.TrimSpace(legacyBootstrapLogin)
 	if login != "" && legacyLogin != "" && !strings.EqualFold(login, legacyLogin) {
 		return Config{}, errors.New("VELMIR_BOOTSTRAP_ADMIN_LOGIN and VELMIR_BOOTSTRAP_ADMIN_EMAIL conflict; remove the legacy email variable or make both values identical")
 	}
@@ -187,7 +222,7 @@ func Load() (Config, error) {
 	return Config{
 		AppEnv:                    appEnv,
 		DemoMode:                  demoMode,
-		TargetDatabaseURL:         os.Getenv("TARGET_DATABASE_URL"),
+		TargetDatabaseURL:         targetDatabaseURL,
 		AdminDatabaseURL:          adminDatabaseURL,
 		HTTPAddr:                  httpAddr,
 		HTTPReadHeaderTimeout:     readHeaderTimeout,
@@ -199,11 +234,14 @@ func Load() (Config, error) {
 		FrontendDistPath:          frontendDistPath,
 		LogLevel:                  logLevel,
 		BootstrapAdminLogin:       login,
-		BootstrapAdminPassword:    os.Getenv("VELMIR_BOOTSTRAP_ADMIN_PASSWORD"),
+		BootstrapAdminPassword:    bootstrapPassword,
 		BootstrapAdminDisplayName: displayName,
 		SessionCookieSecure:       cookieSecure,
 		SessionIdleTimeout:        sessionIdleTimeout,
 		SessionAbsoluteTimeout:    sessionAbsoluteTimeout,
+		SessionCleanupInterval:    sessionCleanupInterval,
+		SessionCleanupBatchSize:   sessionCleanupBatchSize,
+		TrustedProxies:            trustedProxies,
 		DatabaseConnectTimeout:    databaseConnectTimeout,
 		AdminDatabaseMaxConns:     adminMaxConns,
 		TargetDatabaseMaxConns:    targetMaxConns,

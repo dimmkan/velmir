@@ -205,3 +205,14 @@ func (s *Service) resetFailures(email, ip string) {
 	delete(s.attempts, "email:"+ip+":"+email)
 	delete(s.attempts, "ip:"+ip)
 }
+
+func (s *Service) CleanupLoginAttempts() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	for key, entry := range s.attempts {
+		if now.Sub(entry.windowStart) >= loginAttemptWindow {
+			delete(s.attempts, key)
+		}
+	}
+}

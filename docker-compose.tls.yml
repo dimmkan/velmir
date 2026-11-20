@@ -1,0 +1,55 @@
+services:
+  app:
+    environment:
+      TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:?Set TRUSTED_PROXY_CIDRS to the Docker proxy subnet}
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      VELMIR_DOMAIN: ${VELMIR_DOMAIN:?Set VELMIR_DOMAIN}
+      VELMIR_ACME_EMAIL: ${VELMIR_ACME_EMAIL:?Set VELMIR_ACME_EMAIL}
+      VELMIR_PROXY_HTTP_PORT: ${VELMIR_PROXY_HTTP_PORT:-80}
+      VELMIR_PROXY_HTTPS_PORT: ${VELMIR_PROXY_HTTPS_PORT:-443}
+    ports:
+      - "${VELMIR_PROXY_HTTP_PORT:-80}:${VELMIR_PROXY_HTTP_PORT:-80}"
+      - "${VELMIR_PROXY_HTTPS_PORT:-443}:${VELMIR_PROXY_HTTPS_PORT:-443}"
+    volumes:
+      - ./docker/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      app:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    mem_limit: 256m
+    cpus: 0.50
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:2019/config/"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    stop_grace_period: 15s
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${VELMIR_DOCKER_SUBNET:-172.30.0.0/24}
+
+volumes:
+  caddy-data:
+  caddy-config:

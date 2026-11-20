@@ -31,85 +31,203 @@ docker compose -f docker-compose.yml -f docker-compose.demo.yml up --build -d
 
 Откройте `http://127.0.0.1:8080`. При пустой admin database создаются **только для localhost demo** логин `admin` и пароль `admin`; предупреждение выводится в лог без повторного раскрытия пароля. Не публикуйте этот режим в сети и не переносите demo credentials в production. Demo включается только явным вторым `-f`, а target публикуется на `127.0.0.1:5433` для локальных integration-тестов. Admin DB наружу не публикуется.
 
-### Production
+### Production без Caddy TLS proxy
 
-1. Скопируйте `.env.docker.example` в корневой `.env`, замените placeholders и задайте длинный случайный `POSTGRES_PASSWORD`, совпадающий `ADMIN_DATABASE_URL` и безопасные bootstrap credentials. Пароли внутри DSN должны быть URL-encoded.
-2. При необходимости задайте `TARGET_DATABASE_URL`. Без него приложение работает с auth/admin UI, но target resources не настроены.
-3. Запустите:
-
-```bash
-docker compose up --build -d
-```
-
-HTTP публикуется только как `127.0.0.1:${VELMIR_HTTP_PORT:-8080}`. Production рассчитан на внешний HTTPS terminator с тем же origin; `APP_ENV=production` требует `SESSION_COOKIE_SECURE=true`, собранный frontend и отклоняет небезопасную конфигурацию. Прямой HTTP не подходит для production login с Secure cookies. Credential-bearing wildcard CORS не используется.
-
-После первого успешного запуска удалите `VELMIR_BOOTSTRAP_ADMIN_LOGIN`, `VELMIR_BOOTSTRAP_ADMIN_PASSWORD` и legacy `VELMIR_BOOTSTRAP_ADMIN_EMAIL` из `.env` и окружения, затем выполните `docker compose up -d`. Пока существует хотя бы один пользователь, bootstrap ничего не создаёт, не меняет пароль и не требует этих переменных.
-
-| Ситуация | Результат bootstrap |
-|---|---|
-| Production, пользователей нет, безопасные login/password заданы | Один admin с ролью `admin` |
-| Production, пользователей нет, credentials отсутствуют, слабы или `admin/admin` | Ошибка; app не запускается и не становится ready |
-| Demo, пользователей нет, variables пусты | `admin/admin`, только `development + VELMIR_DEMO_MODE=true` |
-| Пользователи уже существуют | Ничего не создаётся и не сбрасывается; повтор идемпотентен |
-
-### Управление Compose
+1. Скопируйте `.env.docker.example` в корневой `.env`, замените placeholders, задайте длинный случайный `POSTGRES_PASSWORD`, совпадающий `ADMIN_DATABASE_URL` и безопасные bootstrap credentials. Пароли внутри DSN должны быть URL-encoded.
+2. При необходимости задайте единый `TARGET_DATABASE_URL`. Без него auth/admin UI работает, но target resources не настроены.
+3. Запустите HTTP на loopback:
 
 ```bash
-docker compose ps
-docker compose logs -f app
-docker compose logs bootstrap
-docker compose stop                 # сохранить containers и named volumes
-docker compose down                 # удалить containers/network, сохранить named volumes
-docker compose up -d                # повторный запуск без пересборки
-docker compose up --build -d        # обновить image из текущих исходников
+docker compose -f docker-compose.yml -f docker-compose.http.yml up --build -d
 ```
 
-`admin-db-data` и demo `target-db-data` сохраняются при `stop`, `down`, restart и повторном migrate/bootstrap. Backup/restore относятся к H2.
+App публикуется только как `127.0.0.1:${VELMIR_HTTP_PORT:-8080}`. Этот режим предназначен для localhost или внешнего HTTPS terminator с тем же origin. Для proxy задайте `TRUSTED_PROXY_CIDRS` только на фактический Docker gateway/proxy CIDR. `APP_ENV=production` требует `SESSION_COOKIE_SECURE=true` и built frontend; прямой HTTP не подходит для production login с Secure cookies.
+
+### Production с Caddy HTTPS
+
+1. Настройте DNS домена на сервер и откройте входящие TCP 80/443. Задайте в `.env` собственные значения, например:
+
+```dotenv
+VELMIR_DOMAIN=admin.example.test
+VELMIR_ACME_EMAIL=admin@example.test
+VELMIR_DOCKER_SUBNET=172.30.0.0/24
+TRUSTED_PROXY_CIDRS=172.30.0.0/24
+```
+
+`admin.example.test` — только placeholder. Если subnet уже занят, измените **обе** переменные на один свободный CIDR. Не используйте `0.0.0.0/0` или `::/0` для trusted proxies.
+
+2. Запустите production HTTPS одной командой:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.tls.yml up --build -d
+```
+
+Caddy публикует только host ports 80/443, автоматически получает и обновляет ACME certificates и перенаправляет HTTP на HTTPS. App и admin DB не публикуют host ports; app принимает только internal Docker traffic от Caddy. Caddy передаёт Host, протокол и перезаписывает client forwarding headers. Admin API слушает только `127.0.0.1:2019` внутри Caddy container и наружу не публикуется. `caddy-data` и `caddy-config` — отдельные named volumes; `restart` и `caddy reload` не удаляют certificates:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.tls.yml exec caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
+```
+
+Go server по-прежнему отдаёт same-origin static/API/SPA; Caddy является дополнительным proxy и не заменяет static server.
+
+### Bootstrap и управление Compose
+
+После первого успешного production запуска удалите bootstrap login/password/email из `.env` и окружения или не подключайте `docker-compose.bootstrap-secrets.yml` при следующих запусках. Пока существует пользователь, bootstrap ничего не создаёт и не меняет пароль. Production по-прежнему отклоняет missing/weak/trivial credentials для пустой DB; `admin/admin` доступен только в явном development demo.
+
+Для выбранного набора `-f` используйте обычные `ps`, `logs`, `stop`, `restart` и `up -d`. `down` без `-v` сохраняет named volumes. `admin-db-data`, `admin-db-backups`, demo `target-db-data`, `caddy-data` и `caddy-config` не удаляются при restart или обычном `down`. Никогда не используйте `down -v` как шаг backup, restore или upgrade.
+
+App работает non-root с read-only root filesystem, tmpfs `/tmp`, `cap_drop: ALL`, no-new-privileges, healthcheck, restart policy и log rotation. Начальные limits: app 512 MiB/1 CPU/128 PIDs, admin DB 1 GiB/1 CPU/256 PIDs, Caddy 256 MiB/0.5 CPU/64 PIDs. Это исходные значения для проверки, а не рекомендация для любой нагрузки; изменяйте их по наблюдаемым метрикам.
+
+### Security headers и client IP
+
+Единственный владелец headers — Go app; Caddy не задаёт конкурирующие значения. Все ответы получают CSP, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY` + `frame-ancestors 'none'` и restrictive `Permissions-Policy`. Production HTTPS дополнительно получает `Strict-Transport-Security: max-age=31536000` без `includeSubDomains` и `preload`; localhost demo HSTS не выдаёт.
+
+CSP разрешает только `'self'` для scripts/API/fonts и `'self' data:` для images. Scripts не имеют `unsafe-inline`/`unsafe-eval`, wildcard sources нет. `style-src 'self' 'unsafe-inline'` — единственное исключение: Vue использует runtime inline style attributes для динамической раскладки и controls. Logo, favicon, dialogs и relation selectors остаются same-origin.
+
+По умолчанию `TRUSTED_PROXY_CIDRS` пуст и `X-Forwarded-For`/`X-Real-IP` игнорируются. Headers учитываются только когда immediate TCP peer входит в доверенный CIDR; цепочка проверяется справа налево, поэтому forged leftmost entries не меняют client IP для login rate limiter. `X-Forwarded-Host` для redirects не используется. В TLS Compose app не имеет host-port, поэтому внешний клиент не может обойти Caddy и подменить IP.
 
 ### Полная таблица окружения
 
-Корневой `.env` используется Docker Compose для подстановок и локальными Go CLI через `godotenv`. `frontend/.env` нужен только Vite development. Ниже **dev** означает локальный backend/Vite, **prod** — основной Compose, **demo** — demo override. «Секрет» означает, что значение нельзя коммитить или выводить в логи.
+Корневой `.env` используется Docker Compose и локальными Go CLI через `godotenv`; `frontend/.env` нужен только Vite. **Prod** — основной Compose, **TLS** — Caddy override, **demo** — demo override. Для `_FILE` переменных секретом является содержимое файла, не путь.
 
-| Переменная | Назначение | Обязательность | Default | Допустимые значения | Режим | Секрет | Безопасный пример |
-|---|---|---|---|---|---|---|---|
-| `POSTGRES_DB` | Имя admin DB | prod: да; demo: задано | нет | Имя PostgreSQL DB | prod/demo | нет | `velmir_admin` |
-| `POSTGRES_USER` | Роль admin DB | prod: да; demo: задано | нет | Имя PostgreSQL role | prod/demo | нет | `velmir` |
-| `POSTGRES_PASSWORD` | Пароль admin DB | prod: да; demo: local-only | нет | Непустой случайный пароль | prod/demo | **да** | `<long-random-password>` |
-| `ADMIN_DATABASE_URL` | DSN admin DB для всех Go processes | prod/dev: да; demo: задано | нет | PostgreSQL DSN | все | **да** | `postgresql://velmir:<password>@admin-db:5432/velmir_admin?sslmode=disable` |
-| `TARGET_DATABASE_URL` | Единый DSN read/mutation target pools | нет | пусто | PostgreSQL DSN | все | **да** | `postgresql://app:<password>@target-db:5432/app?sslmode=require` |
-| `VELMIR_DEPRECATED_TARGET_WRITE_DATABASE_URL` | Compose-only перенос старого значения для migration error; не DSN pool | нет, не задавать вручную | пусто | Любое nonempty вызывает ошибку | prod/demo compatibility | **да** | пусто |
-| `APP_ENV` | Режим безопасности | нет | backend: `development`; Compose: `production` | `development`, `production` | все | нет | `production` |
-| `SESSION_COOKIE_SECURE` | Secure flag cookies | prod: `true` | backend: `false`; Compose: `true` | `true`, `false` | все | нет | `true` |
-| `VELMIR_BOOTSTRAP_ADMIN_LOGIN` | Login первого admin | Только пустая prod DB | нет; demo: `admin` | До 254 символов, без whitespace | все | нет | `admin` |
-| `VELMIR_BOOTSTRAP_ADMIN_PASSWORD` | Пароль первого admin | Только пустая prod DB | нет; demo: `admin` | Prod: 12–1024, не trivial | все | **да** | `<long-random-password>` |
-| `VELMIR_BOOTSTRAP_ADMIN_DISPLAY_NAME` | Имя первого admin | нет | `Administrator` | До 200 символов | все | нет | `Administrator` |
-| `VELMIR_BOOTSTRAP_ADMIN_EMAIL` | Legacy fallback для login | нет | пусто | Как login; конфликт с canonical запрещён | все | нет | `admin@example.test` |
-| `VELMIR_DEMO_MODE` | Разрешить demo-only bootstrap | Только demo override | `false` | `true` только с development | demo | нет | `true` |
-| `VELMIR_HTTP_PORT` | Host HTTP port | нет | `8080` | 1–65535 | prod/demo | нет | `8080` |
-| `VELMIR_TARGET_PORT` | Host demo target port | нет | `5433` | 1–65535 | demo | нет | `5433` |
-| `VELMIR_IMAGE` | Имя application image | нет | `velmir:local` | Docker image reference | prod/demo | нет | `velmir:local` |
-| `HTTP_ADDR` | Backend listen address | нет | `127.0.0.1:8080`; Compose: `0.0.0.0:8080` | `host:port` | dev; Compose фиксирует | нет | `127.0.0.1:8080` |
-| `FRONTEND_DIST_PATH` | Каталог built Vue | prod: да | dev: пусто; image: `/app/frontend/dist` | Существующий каталог с `index.html` | все | нет | `/app/frontend/dist` |
-| `LOG_LEVEL` | Уровень structured logs | нет | `info` | `debug`, `info`, `warn`, `error` | все | нет | `info` |
-| `SESSION_IDLE_TIMEOUT` | Idle session lifetime | нет | `30m` | Положительная Go duration | все | нет | `30m` |
-| `SESSION_ABSOLUTE_TIMEOUT` | Absolute session lifetime | нет | `24h` | Go duration, не меньше idle | все | нет | `24h` |
-| `DATABASE_CONNECT_TIMEOUT` | Timeout нового DB connection | нет | `5s` | Положительная Go duration | все | нет | `5s` |
-| `ADMIN_DATABASE_MAX_CONNS` | Max admin pool connections | нет | `10` | Положительное integer | все | нет | `10` |
-| `TARGET_DATABASE_MAX_CONNS` | Max connections в каждом target pool | нет | `10` | Положительное integer | все | нет | `10` |
-| `DATABASE_MAX_CONN_LIFETIME` | Max connection lifetime | нет | `30m` | Положительная Go duration | все | нет | `30m` |
-| `DATABASE_MAX_CONN_IDLE_TIME` | Max idle connection time | нет | `5m` | Положительная Go duration | все | нет | `5m` |
-| `HTTP_READ_HEADER_TIMEOUT` | Read headers timeout | нет | `5s` | Положительная Go duration | все | нет | `5s` |
-| `HTTP_READ_TIMEOUT` | Read request timeout | нет | `15s` | Положительная Go duration | все | нет | `15s` |
-| `HTTP_WRITE_TIMEOUT` | Write response timeout | нет | `30s` | Положительная Go duration | все | нет | `30s` |
-| `HTTP_IDLE_TIMEOUT` | Keep-alive idle timeout | нет | `60s` | Положительная Go duration | все | нет | `60s` |
-| `HTTP_SHUTDOWN_TIMEOUT` | Graceful SIGTERM shutdown | нет | `10s` | Положительная Go duration | все | нет | `10s` |
-| `HTTP_MAX_JSON_BODY_SIZE` | Общий лимит JSON body | нет | `1048576` | Положительное число bytes | все | нет | `1048576` |
+| Переменная | Назначение | Обязательность | Default | Режим | Секрет | Безопасный пример |
+|---|---|---|---|---|---|---|
+| `POSTGRES_DB` | Имя admin DB | prod: да; demo: задано | нет | prod/demo | нет | `velmir_admin` |
+| `POSTGRES_USER` | Роль admin DB | prod: да; demo: задано | нет | prod/demo | нет | `velmir` |
+| `POSTGRES_PASSWORD` | Пароль admin DB | prod env: да | нет | prod/demo | **да** | `<long-random-password>` |
+| `POSTGRES_PASSWORD_FILE` | Native PostgreSQL secret file | Вместо password в secrets mode | пусто | prod | путь нет; файл **да** | `/run/secrets/postgres_password` |
+| `ADMIN_DATABASE_URL` | DSN admin DB | prod/dev: да; demo: задано | нет | все | **да** | `postgresql://velmir:<password>@admin-db:5432/velmir_admin?sslmode=disable` |
+| `ADMIN_DATABASE_URL_FILE` | Файл с admin DSN | Вместо env в secrets mode | пусто | prod/dev | путь нет; файл **да** | `/run/secrets/admin_database_url` |
+| `TARGET_DATABASE_URL` | Единый DSN read/mutation pools | нет | пусто | все | **да** | `postgresql://app:<password>@target-db:5432/app?sslmode=require` |
+| `TARGET_DATABASE_URL_FILE` | Файл с единым target DSN | нет; вместо env | пусто | prod/dev | путь нет; файл **да** | `/run/secrets/target_database_url` |
+| `VELMIR_DEPRECATED_TARGET_WRITE_DATABASE_URL` | Legacy migration error; не pool | не задавать | пусто | compatibility | **да** | пусто |
+| `APP_ENV` | Security mode | нет | backend `development`; Compose `production` | все | нет | `production` |
+| `SESSION_COOKIE_SECURE` | Secure cookie flag | prod: `true` | backend `false`; Compose `true` | все | нет | `true` |
+| `VELMIR_BOOTSTRAP_ADMIN_LOGIN` | Login первого admin | Только пустая prod DB | пусто; demo fallback | все | нет | `admin@example.test` |
+| `VELMIR_BOOTSTRAP_ADMIN_LOGIN_FILE` | Файл login первого admin | Альтернатива env | пусто | prod/dev | путь нет; файл нет | `/run/secrets/bootstrap_admin_login` |
+| `VELMIR_BOOTSTRAP_ADMIN_PASSWORD` | Пароль первого admin | Только пустая prod DB | пусто; demo fallback | все | **да** | `<long-random-password>` |
+| `VELMIR_BOOTSTRAP_ADMIN_PASSWORD_FILE` | Файл пароля первого admin | Альтернатива env | пусто | prod/dev | путь нет; файл **да** | `/run/secrets/bootstrap_admin_password` |
+| `VELMIR_BOOTSTRAP_ADMIN_DISPLAY_NAME` | Имя первого admin | нет | `Administrator` | все | нет | `Administrator` |
+| `VELMIR_BOOTSTRAP_ADMIN_EMAIL` / `_FILE` | Legacy login fallback | нет | пусто | все | env нет; file содержимое нет | `admin@example.test` |
+| `VELMIR_DEMO_MODE` | Demo-only bootstrap | Только demo | `false` | demo | нет | `true` |
+| `VELMIR_HTTP_PORT` | Non-TLS host HTTP port | нет | `8080` | HTTP/demo | нет | `8080` |
+| `VELMIR_PROXY_HTTP_PORT` | Caddy host HTTP port | нет | `80` | TLS | нет | `80` |
+| `VELMIR_PROXY_HTTPS_PORT` | Caddy host HTTPS port | нет | `443` | TLS | нет | `443` |
+| `VELMIR_DOMAIN` | Public Caddy site name | TLS: да | нет | TLS | нет | `admin.example.test` |
+| `VELMIR_ACME_EMAIL` | ACME account email | TLS: да | нет | TLS | нет | `admin@example.test` |
+| `VELMIR_DOCKER_SUBNET` | TLS Compose network subnet | нет | `172.30.0.0/24` | TLS | нет | `172.30.0.0/24` |
+| `TRUSTED_PROXY_CIDRS` | Trusted immediate proxies | TLS: да; иначе нет | пусто | prod/dev/TLS | нет | `172.30.0.0/24` |
+| `VELMIR_TARGET_PORT` | Demo target host port | нет | `5433` | demo | нет | `5433` |
+| `VELMIR_IMAGE` | Application image | нет | `velmir:local` | prod/demo/TLS | нет | `velmir:local` |
+| `HTTP_ADDR` | Backend listen address | нет | `127.0.0.1:8080`; Compose `0.0.0.0:8080` | dev; Compose fixed | нет | `127.0.0.1:8080` |
+| `FRONTEND_DIST_PATH` | Built Vue directory | prod: да | image `/app/frontend/dist` | все | нет | `/app/frontend/dist` |
+| `LOG_LEVEL` | Structured log level | нет | `info` | все | нет | `info` |
+| `SESSION_IDLE_TIMEOUT` | Idle session lifetime | нет | `30m` | все | нет | `30m` |
+| `SESSION_ABSOLUTE_TIMEOUT` | Absolute session lifetime | нет | `24h`, не меньше idle | все | нет | `24h` |
+| `SESSION_CLEANUP_INTERVAL` | Период cleanup | нет | `15m` | все | нет | `15m` |
+| `SESSION_CLEANUP_BATCH_SIZE` | Max rows за cleanup batch | нет | `1000` | все | нет | `1000` |
+| `DATABASE_CONNECT_TIMEOUT` | DB connect timeout | нет | `5s` | все | нет | `5s` |
+| `ADMIN_DATABASE_MAX_CONNS` | Admin pool max connections | нет | `10` | все | нет | `10` |
+| `TARGET_DATABASE_MAX_CONNS` | Max connections в каждом target pool | нет | `10` | все | нет | `10` |
+| `DATABASE_MAX_CONN_LIFETIME` | Connection lifetime | нет | `30m` | все | нет | `30m` |
+| `DATABASE_MAX_CONN_IDLE_TIME` | Idle connection time | нет | `5m` | все | нет | `5m` |
+| `HTTP_READ_HEADER_TIMEOUT` | Read headers timeout | нет | `5s` | все | нет | `5s` |
+| `HTTP_READ_TIMEOUT` | Read timeout | нет | `15s` | все | нет | `15s` |
+| `HTTP_WRITE_TIMEOUT` | Write timeout | нет | `30s` | все | нет | `30s` |
+| `HTTP_IDLE_TIMEOUT` | Keep-alive idle timeout | нет | `60s` | все | нет | `60s` |
+| `HTTP_SHUTDOWN_TIMEOUT` | Graceful SIGTERM shutdown | нет | `10s` | все | нет | `10s` |
+| `HTTP_MAX_JSON_BODY_SIZE` | JSON body limit in bytes | нет | `1048576` | все | нет | `1048576` |
 
-Для `cmd/users` пароль передаётся только через необязательную secret-переменную `VELMIR_USER_PASSWORD` (12–1024 символов), не через аргументы. Frontend development дополнально использует non-secret `VITE_BACKEND_BASE_URL=` (same-origin) и `VITE_BACKEND_PROXY_TARGET=http://127.0.0.1:8080` (только Vite proxy).
+Для `cmd/users` пароль передаётся только через secret `VELMIR_USER_PASSWORD` (12–1024), не через аргументы. Vite development использует non-secret `VITE_BACKEND_BASE_URL=` и `VITE_BACKEND_PROXY_TARGET=http://127.0.0.1:8080`. Production bundle не получает DSN/passwords и использует same-origin API.
 
-Production image собирает frontend с пустым same-origin API URL, поэтому `VITE_BACKEND_BASE_URL` ему не нужен. Внутри Compose DSN использует DNS service names `admin-db` и `target-db`: `localhost` внутри container означал бы сам container, а не другой service. Нельзя коммитить корневой/frontend `.env`, реальные DSN, `POSTGRES_PASSWORD`, bootstrap/user passwords, session/CSRF tokens. `.env.docker.example` содержит только placeholders.
+Nonempty env и соответствующий `_FILE` взаимоисключаемы. Пустой/unreadable file вызывает config error без вывода содержимого; в DSN подставляется именно содержимое, не path. Файл завершающий CR/LF теряет только line endings. Не коммитьте `.env`, реальные DSN, passwords, session/CSRF tokens или backups.
 
-**Breaking config migration:** удалите `TARGET_WRITE_DATABASE_URL` и объедините старые настройки в один `TARGET_DATABASE_URL`, указывающий на роль с необходимыми privileges. Непустая старая переменная вызывает явную ошибку с инструкцией; она не игнорируется. Отдельный writer DSN больше нигде не используется.
+**Breaking config migration:** удалите `TARGET_WRITE_DATABASE_URL`; отдельный writer DSN не используется. Единый `TARGET_DATABASE_URL` сохраняется во всех режимах.
+
+### Docker secrets
+
+`docker-compose.secrets.yml` монтирует PostgreSQL password в admin-db, а admin DSN только в migrate/bootstrap/app. `docker-compose.target-secret.yml` отдельно добавляет target DSN только app. `docker-compose.bootstrap-secrets.yml` нужен только для первого admin. Секреты не копируются в image или frontend bundle.
+
+Создайте локальные файлы без реальных значений в Git:
+
+```powershell
+New-Item -ItemType Directory -Path secrets -Force
+# Запишите каждый secret в редакторе без командной строки:
+notepad secrets\postgres_password
+notepad secrets\admin_database_url
+notepad secrets\bootstrap_admin_login
+notepad secrets\bootstrap_admin_password
+# Опционально: secrets\target_database_url
+```
+
+```bash
+mkdir -p secrets
+chmod 700 secrets
+# Создайте файлы редактором; затем:
+chmod 600 secrets/*
+```
+
+Каталоги `secrets/`, `backups/` и `*.dump` исключены из Git и Docker build context. Пример первого production secrets + TLS запуска:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.secrets.yml -f docker-compose.bootstrap-secrets.yml -f docker-compose.target-secret.yml -f docker-compose.tls.yml up --build -d
+```
+
+Без target или для повторного запуска уберите соответствующий override. Для non-TLS замените TLS файл на `docker-compose.http.yml`. Обычный env-based local development не меняется.
+
+### Backup admin database
+
+Backup использует `pg_dump` custom format внутри admin-db и отдельный named volume `admin-db-backups`; password не передаётся аргументом, binary output не проходит через shell/PowerShell redirection. Полный admin backup включает users, roles/permissions, sessions, settings (если появятся), audit events и `goose_db_version`. Target DB в него **не входит** — её backup выполняет владелец target.
+
+На работающем stack с выбранным `COMPOSE_FILE` или текущим base Compose:
+
+```bash
+sh scripts/backup-admin.sh
+# Или явное имя:
+sh scripts/backup-admin.sh velmir-admin-before-upgrade.dump
+docker compose exec -T admin-db ls -l /backups
+```
+
+```powershell
+.\scripts\Backup-Admin.ps1
+# Или:
+.\scripts\Backup-Admin.ps1 -BackupName velmir-admin-before-upgrade.dump
+docker compose exec -T admin-db ls -l /backups
+```
+
+Для demo в PowerShell предварительно задайте `$env:COMPOSE_FILE = "docker-compose.yml;docker-compose.demo.yml"`, в shell — `COMPOSE_FILE=docker-compose.yml:docker-compose.demo.yml`. Не перенаправляйте `.dump` через `>`: это может повредить binary в PowerShell. Для внешнего архивирования используйте `docker cp`, а не text redirection. Backup files не попадают в Git/image.
+
+### Restore и проверка
+
+Предпочтителен fresh isolated PostgreSQL/admin DB и отдельный Compose project. Не восстанавливайте поверх production DB. Scripts ниже создают **новую** DB через `createdb` (существующее имя вызывает ошибку), затем `pg_restore --single-transaction --exit-on-error`; automatic destructive restore отсутствует.
+
+```bash
+sh scripts/restore-admin-fresh.sh velmir-admin-before-upgrade.dump velmir_admin_restored
+```
+
+```powershell
+.\scripts\Restore-AdminFresh.ps1 -BackupName velmir-admin-before-upgrade.dump -NewDatabaseName velmir_admin_restored
+```
+
+Для полной изоляции запустите временный admin-db с отдельными project/volume и смонтируйте копию backup в `/backups`; выполните тот же restore там. Затем направьте отдельный app на restored `ADMIN_DATABASE_URL`, запустите migrate (идемпотентен) и проверьте вход существующего admin, `/api/auth/me`, roles/permissions и history. `TARGET_DATABASE_URL` для проверки restored admin state не нужен. SQL-контроль: users, `user_roles`, `role_permissions`, `audit_events`, `sessions` и последняя `goose_db_version` должны соответствовать backup. После проверки остановите только временные resources; не удаляйте существующие project volumes.
+
+### Upgrade и rollback
+
+1. Создайте и проверьте nonempty backup до обновления.
+2. Обновите image и запустите отдельный migrate job при доступной admin DB:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.http.yml up -d admin-db
+docker compose -f docker-compose.yml -f docker-compose.http.yml run --rm migrate
+docker compose -f docker-compose.yml -f docker-compose.http.yml run --rm migrate
+docker compose -f docker-compose.yml -f docker-compose.http.yml up -d
+```
+
+Повторный migrate безопасен благодаря Goose state. Для TLS/secrets используйте тот же полный набор `-f`. Rollback image **не откатывает migrations**: старый image запускайте только если он совместим с новой schema. Нет automatic destructive migration rollback; восстановление backup — отдельная ручная disaster recovery операция в fresh DB с оценкой потери данных после backup.
+
+### Несколько instances
+
+Expired session cleanup безопасен на нескольких replicas благодаря batches и `SKIP LOCKED`; он затрагивает только admin DB и не удаляет active sessions. Login rate limiter остаётся **process-local** и **не синхронизируется** между replicas: общий лимит зависит от распределения запросов. Для единого внешнего limit используйте proxy отдельно. Sticky sessions не требуются, поскольку session records общие; background jobs не являются distributed scheduler.
 
 ### Локальная разработка Vite
 
@@ -134,7 +252,7 @@ npm run dev
 
 Открывайте Vite URL (обычно `http://localhost:5173`). Vite проксирует `/api`, `/healthz`, `/readyz`; cookies остаются same-origin. Production Go server сам отдаёт `dist`, hashed assets с long-term cache и `index.html` с `no-cache`; `/api/*` никогда не попадает в SPA fallback.
 
-**Ограничения H1:** внешний HTTPS/reverse proxy, trusted proxy, CSP/HSTS, Caddy, backup/restore не входят в этот этап; автоматических GRANT/DDL в target нет; field-level permissions не реализованы. **H2:** production TLS/proxy configuration, CSP/HSTS/trusted proxy, Caddy при необходимости и проверенные backup/restore процедуры.
+**H2 hardening:** добавлены optional Caddy HTTPS, explicit trusted proxy configuration, CSP/HSTS, Docker secrets, session maintenance и admin backup/restore. Автоматических GRANT/DDL в target нет; field-level permissions не реализованы и остаются следующим функциональным этапом.
 
 ## Дизайн и язык интерфейса
 
@@ -147,7 +265,7 @@ npm run dev
 
 При запуске приложение вызывает `GET /api/auth/me`, перенаправляет неавторизованных пользователей на `/login`, а после входа восстанавливает исходный маршрут. Выход отзывает только текущую сессию. Для mutation-запросов и выхода требуется проверяемый сервером заголовок `X-CSRF-Token`. Пароли, session tokens и CSRF tokens не сохраняются в `localStorage`; session cookie имеет флаг HttpOnly, а CSRF token хранится только в памяти.
 
-Session cookies используют `SameSite=Lax`; idle expiration по умолчанию составляет `30m`, absolute expiration — `24h`. Атрибуты cookies, настройки и ответы endpoints описаны в `docs/api.md`.
+Session cookies используют `SameSite=Lax`; idle expiration по умолчанию составляет `30m`, absolute expiration — `24h`. Expired records удаляются фоновыми batches каждые `15m` (настраивается); active sessions не затрагиваются, а SIGTERM останавливает cleanup. Атрибуты cookies, настройки и ответы endpoints описаны в `docs/api.md`.
 
 ## Роли, права и управление пользователями
 
