@@ -1,0 +1,62 @@
+services:
+  admin-db:
+    environment:
+      POSTGRES_USER: velmir
+      POSTGRES_PASSWORD: velmir_local_only
+      POSTGRES_DB: velmir_admin
+
+  target-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: velmir_target_admin
+      POSTGRES_PASSWORD: target_admin_local_only
+      POSTGRES_DB: velmir_demo
+    ports:
+      - "127.0.0.1:${VELMIR_TARGET_PORT:-5433}:5432"
+    volumes:
+      - target-db-data:/var/lib/postgresql/data
+      - ./docker/target-db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U velmir_target_admin -d velmir_demo"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  migrate:
+    environment:
+      ADMIN_DATABASE_URL: postgresql://velmir:velmir_local_only@admin-db:5432/velmir_admin?sslmode=disable
+      APP_ENV: development
+      VELMIR_DEMO_MODE: "true"
+      TARGET_DATABASE_URL: postgresql://velmir_writer:velmir_writer_local_only@target-db:5432/velmir_demo?sslmode=disable
+      SESSION_COOKIE_SECURE: "false"
+
+  bootstrap:
+    environment:
+      ADMIN_DATABASE_URL: postgresql://velmir:velmir_local_only@admin-db:5432/velmir_admin?sslmode=disable
+      APP_ENV: development
+      VELMIR_DEMO_MODE: "true"
+      TARGET_DATABASE_URL: postgresql://velmir_writer:velmir_writer_local_only@target-db:5432/velmir_demo?sslmode=disable
+      SESSION_COOKIE_SECURE: "false"
+      VELMIR_BOOTSTRAP_ADMIN_LOGIN: ""
+      VELMIR_BOOTSTRAP_ADMIN_EMAIL: ""
+      VELMIR_BOOTSTRAP_ADMIN_PASSWORD: ""
+      VELMIR_BOOTSTRAP_ADMIN_DISPLAY_NAME: Demo Administrator
+
+  app:
+    environment:
+      ADMIN_DATABASE_URL: postgresql://velmir:velmir_local_only@admin-db:5432/velmir_admin?sslmode=disable
+      APP_ENV: development
+      VELMIR_DEMO_MODE: "true"
+      TARGET_DATABASE_URL: postgresql://velmir_writer:velmir_writer_local_only@target-db:5432/velmir_demo?sslmode=disable
+      SESSION_COOKIE_SECURE: "false"
+      VELMIR_BOOTSTRAP_ADMIN_LOGIN: ""
+      VELMIR_BOOTSTRAP_ADMIN_EMAIL: ""
+      VELMIR_BOOTSTRAP_ADMIN_PASSWORD: ""
+    depends_on:
+      target-db:
+        condition: service_healthy
+
+volumes:
+  target-db-data:

@@ -68,7 +68,7 @@ Do not edit files owned by another agent without explicit coordination.
 - Do not add unrequested frameworks or architectural patterns.
 - Never commit secrets.
 - Never run destructive SQL against the target database.
-- Target database starts in read-only mode.
+- Target reads use read-only transactions; supported mutations use a separate pool built from the same TARGET_DATABASE_URL and require database-owner grants.
 - Ask before changing public API contracts or database migrations.
 - Run tests and builds before reporting completion.
 

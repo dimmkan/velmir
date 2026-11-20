@@ -544,7 +544,7 @@ func writeMutationError(w http.ResponseWriter, err error) {
 }
 
 func writeTargetReadOnly(w http.ResponseWriter) {
-	writeJSON(w, http.StatusForbidden, errorResponse{Error: apiError{Code: "TARGET_READ_ONLY", Message: "Target writing is not configured"}})
+	writeJSON(w, http.StatusForbidden, errorResponse{Error: apiError{Code: "TARGET_READ_ONLY", Message: "Target mutations are unavailable for this configuration or resource"}})
 }
 
 func writeTargetNotConfigured(w http.ResponseWriter) {

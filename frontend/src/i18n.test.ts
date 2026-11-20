@@ -105,12 +105,12 @@ describe('translations and errors', () => {
 
   it('maps server codes, HTTP states and unknown errors to localized messages', () => {
     i18n.global.locale.value = 'ru'
-    expect(localizeError('INVALID_CREDENTIALS', 401)).toBe('Неверный email или пароль.')
+    expect(localizeError('INVALID_CREDENTIALS', 401)).toBe('Неверный логин или пароль.')
     expect(localizeError('FORBIDDEN', 403)).toBe('У вас нет права на выполнение этого действия.')
     expect(localizeError('UNLISTED_SERVER_CODE')).toBe(ru.errors.generic)
 
     i18n.global.locale.value = 'en'
-    expect(localizeError('INVALID_CREDENTIALS')).toBe('Invalid email or password.')
+    expect(localizeError('INVALID_CREDENTIALS')).toBe('Invalid login or password.')
     expect(localizeError('UNLISTED_SERVER_CODE')).toBe(en.errors.generic)
     expect(localizeError('UNAUTHENTICATED', 401)).toBe(en.errors.unauthenticated)
   })

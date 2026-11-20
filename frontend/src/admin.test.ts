@@ -10,10 +10,11 @@ import {
 
 describe('administration form validation', () => {
   it('validates user creation and password fields on the client', () => {
-    expect(validateUserForm({ email: 'invalid', display_name: '', password: 'short' })).toMatchObject({
+    expect(validateUserForm({ email: 'invalid login', display_name: '', password: 'short' })).toMatchObject({
       email: expect.any(String),
       password: expect.any(String),
     })
+    expect(validateUserForm({ email: 'admin', display_name: 'User', password: 'a-long-password' })).toEqual({})
     expect(validateUserForm({ email: 'user@example.test', display_name: 'User', password: 'a-long-password' })).toEqual({})
     expect(validateDisplayName(' ')).toHaveProperty('display_name')
     expect(validateDisplayName('Readable name')).toEqual({})

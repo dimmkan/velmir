@@ -4,12 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"velmir/backend/internal/audit"
 	"velmir/backend/internal/auth"
@@ -22,19 +21,34 @@ import (
 )
 
 func main() {
-	if err := run(); err != nil {
-		log.Printf("server stopped: %v", err)
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	if err := run(logger); err != nil {
+		logger.Error("server stopped", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run() error {
+func run(logger *slog.Logger) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load configuration: %w", err)
 	}
+	var level slog.Level
+	if err := level.UnmarshalText([]byte(cfg.LogLevel)); err != nil {
+		return fmt.Errorf("parse log level: %w", err)
+	}
+	logger = slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
 
-	adminDatabase, targetDatabase, targetWriteDatabase, err := database.NewPools(context.Background(), cfg.AdminDatabaseURL, cfg.TargetDatabaseURL, cfg.TargetWriteDatabaseURL)
+	poolOptions := database.PoolOptions{
+		AdminDatabaseURL:  cfg.AdminDatabaseURL,
+		TargetDatabaseURL: cfg.TargetDatabaseURL,
+		ConnectTimeout:    cfg.DatabaseConnectTimeout,
+		AdminMaxConns:     cfg.AdminDatabaseMaxConns,
+		TargetMaxConns:    cfg.TargetDatabaseMaxConns,
+		MaxConnLifetime:   cfg.DatabaseMaxConnLifetime,
+		MaxConnIdleTime:   cfg.DatabaseMaxConnIdleTime,
+	}
+	adminDatabase, targetDatabase, targetMutationDatabase, err := database.NewPools(context.Background(), poolOptions)
 	if err != nil {
 		return err
 	}
@@ -42,27 +56,23 @@ func run() error {
 	if targetDatabase != nil {
 		defer targetDatabase.Close()
 	}
-	if targetWriteDatabase != nil {
-		defer targetWriteDatabase.Close()
+	if targetMutationDatabase != nil {
+		defer targetMutationDatabase.Close()
 	}
+	startupContext, cancelStartup := context.WithTimeout(context.Background(), cfg.DatabaseConnectTimeout)
+	if err := adminDatabase.Ping(startupContext); err != nil {
+		cancelStartup()
+		return fmt.Errorf("connect to admin database: %w", err)
+	}
+	cancelStartup()
 
 	authService, err := auth.NewService(auth.NewStore(adminDatabase), cfg.SessionIdleTimeout, cfg.SessionAbsoluteTimeout)
 	if err != nil {
 		return fmt.Errorf("initialize authentication: %w", err)
 	}
-	bootstrapContext, cancelBootstrap := context.WithTimeout(context.Background(), 30*time.Second)
-	created, err := auth.Bootstrap(bootstrapContext, adminDatabase, cfg.BootstrapAdminEmail, cfg.BootstrapAdminPassword)
-	cancelBootstrap()
-	if err != nil {
-		return fmt.Errorf("bootstrap administrator: %w", err)
-	}
-	if created {
-		log.Print("bootstrap administrator created; remove VELMIR_BOOTSTRAP_ADMIN_EMAIL and VELMIR_BOOTSTRAP_ADMIN_PASSWORD from the environment")
-	}
-
 	var writer *records.Writer
-	if targetWriteDatabase != nil {
-		writer = records.NewWriter(targetWriteDatabase)
+	if targetMutationDatabase != nil {
+		writer = records.NewWriter(targetMutationDatabase)
 	}
 	permissionStore := authorization.NewStore(adminDatabase)
 	administration := auth.NewAdministration(adminDatabase)
@@ -71,21 +81,32 @@ func run() error {
 	if targetDatabase != nil {
 		router = httpapi.NewRouter(adminDatabase, targetDatabase, introspection.New(targetDatabase), records.New(targetDatabase), writer, authService, permissionStore, auditStore, cfg.SessionCookieSecure, administration)
 	}
+	var handler http.Handler = httpapi.LimitJSONBody(router, cfg.HTTPMaxJSONBodySize)
+	if cfg.FrontendDistPath != "" {
+		handler, err = httpapi.NewStaticHandler(handler, cfg.FrontendDistPath)
+		if err != nil {
+			return fmt.Errorf("configure frontend static files: %w", err)
+		}
+	} else {
+		logger.Info("frontend static serving is disabled; use the Vite development server")
+	}
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           router,
-		ReadHeaderTimeout: 5 * time.Second,
+		Handler:           handler,
+		ReadHeaderTimeout: cfg.HTTPReadHeaderTimeout,
+		ReadTimeout:       cfg.HTTPReadTimeout,
+		WriteTimeout:      cfg.HTTPWriteTimeout,
+		IdleTimeout:       cfg.HTTPIdleTimeout,
+		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelError),
 	}
 
 	signalContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-
 	serverError := make(chan error, 1)
 	go func() {
 		serverError <- server.ListenAndServe()
 	}()
-
-	log.Printf("backend listening on %s", cfg.HTTPAddr)
+	logger.Info("backend listening", "address", cfg.HTTPAddr, "app_env", cfg.AppEnv, "target_configured", cfg.TargetDatabaseURL != "")
 	select {
 	case err := <-serverError:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -93,9 +114,10 @@ func run() error {
 		}
 		return nil
 	case <-signalContext.Done():
+		logger.Info("shutdown signal received")
 	}
 
-	shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	shutdownContext, cancel := context.WithTimeout(context.Background(), cfg.HTTPShutdownTimeout)
 	defer cancel()
 	if err := server.Shutdown(shutdownContext); err != nil {
 		return fmt.Errorf("shut down HTTP server: %w", err)
@@ -103,5 +125,6 @@ func run() error {
 	if err := <-serverError; err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("serve HTTP: %w", err)
 	}
+	logger.Info("server stopped gracefully")
 	return nil
 }

@@ -327,7 +327,7 @@ Relation create/delete operations are audited as ordinary junction resource `cre
 
 ## POST /api/resources/{schema}/{resource}/records
 
-Creates a record in a table. It requires `create` on the resource and a valid CSRF token; without the permission it returns HTTP 403 `FORBIDDEN`. This endpoint is available only when `TARGET_WRITE_DATABASE_URL` is configured; introspection and identifier validation still use fresh metadata read through `TARGET_DATABASE_URL`.
+Creates a record in a table. It requires `create` on the resource and a valid CSRF token; without the permission it returns HTTP 403 `FORBIDDEN`. Metadata reads and mutations use separate pools created from the same `TARGET_DATABASE_URL`. The target database owner must grant the required PostgreSQL privileges.
 
 Request body:
 
@@ -379,7 +379,7 @@ The request and success bodies have the same shape as creation. An empty `values
 
 ## DELETE /api/resources/{schema}/{resource}/records/{key}
 
-Deletes one table record and returns HTTP 204 with no body. It requires a session, the independent `delete` permission on the resource and a valid CSRF token. The endpoint uses only `TARGET_WRITE_DATABASE_URL`; without a writer DSN it returns HTTP 403 `TARGET_READ_ONLY`. The read pool is never used for deletion.
+Deletes one table record and returns HTTP 204 with no body. It requires a session, the independent `delete` permission on the resource and a valid CSRF token. The mutation pool is created from the same `TARGET_DATABASE_URL`; the read pool remains read-only and is never used for deletion.
 
 `{key}` uses the same URL-encoded JSON format as PATCH and supports simple/composite PKs. Schema, resource and PK are checked against the fresh metadata allowlist. Identifiers are quoted and values are sent only as SQL parameters. Views and tables without a PK return `RESOURCE_READ_ONLY`. No request body is used. Bulk delete and deleting multiple records in one request are not supported.
 
@@ -402,7 +402,7 @@ The error envelope is shared with read endpoints. Validation and some constraint
 ```
 
 - HTTP 400: `INVALID_RECORD`, `INVALID_RECORD_KEY`, `NOT_NULL_VIOLATION`, `FOREIGN_KEY_VIOLATION` or `CHECK_VIOLATION`.
-- HTTP 403: `FORBIDDEN` when the required permission is missing; `CSRF_TOKEN_INVALID` for a missing or invalid CSRF token; `TARGET_READ_ONLY` when `TARGET_WRITE_DATABASE_URL` is absent. The read pool remains read-only.
+- HTTP 403: `FORBIDDEN` when the required permission is missing; `CSRF_TOKEN_INVALID` for a missing or invalid CSRF token. The read pool remains read-only, and database privileges additionally constrain mutations.
 - HTTP 404: `RESOURCE_NOT_FOUND` or `RECORD_NOT_FOUND`.
 - HTTP 409: `RESOURCE_READ_ONLY` or `UNIQUE_VIOLATION`.
 - HTTP 503: `TARGET_NOT_CONFIGURED`.

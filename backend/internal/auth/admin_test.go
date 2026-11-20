@@ -54,7 +54,7 @@ func TestCreateUserRejectsInvalidCredentialsBeforeDatabase(t *testing.T) {
 		email    string
 		password string
 	}{
-		{email: "invalid", password: "a-long-test-password"},
+		{email: "invalid login", password: "a-long-test-password"},
 		{email: "viewer@example.test", password: "short"},
 		{email: "viewer@example.test", password: ""},
 	} {

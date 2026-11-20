@@ -1,41 +1,89 @@
+x-app-environment: &app-environment
+  ADMIN_DATABASE_URL: ${ADMIN_DATABASE_URL:-}
+  TARGET_DATABASE_URL: ${TARGET_DATABASE_URL:-}
+  VELMIR_DEPRECATED_TARGET_WRITE_DATABASE_URL: ${TARGET_WRITE_DATABASE_URL:-}
+  APP_ENV: ${APP_ENV:-production}
+  VELMIR_DEMO_MODE: ${VELMIR_DEMO_MODE:-false}
+  HTTP_ADDR: 0.0.0.0:8080
+  HTTP_READ_HEADER_TIMEOUT: ${HTTP_READ_HEADER_TIMEOUT:-5s}
+  HTTP_READ_TIMEOUT: ${HTTP_READ_TIMEOUT:-15s}
+  HTTP_WRITE_TIMEOUT: ${HTTP_WRITE_TIMEOUT:-30s}
+  HTTP_IDLE_TIMEOUT: ${HTTP_IDLE_TIMEOUT:-60s}
+  HTTP_SHUTDOWN_TIMEOUT: ${HTTP_SHUTDOWN_TIMEOUT:-10s}
+  HTTP_MAX_JSON_BODY_SIZE: ${HTTP_MAX_JSON_BODY_SIZE:-1048576}
+  FRONTEND_DIST_PATH: /app/frontend/dist
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
+  SESSION_IDLE_TIMEOUT: ${SESSION_IDLE_TIMEOUT:-30m}
+  SESSION_ABSOLUTE_TIMEOUT: ${SESSION_ABSOLUTE_TIMEOUT:-24h}
+  DATABASE_CONNECT_TIMEOUT: ${DATABASE_CONNECT_TIMEOUT:-5s}
+  ADMIN_DATABASE_MAX_CONNS: ${ADMIN_DATABASE_MAX_CONNS:-10}
+  TARGET_DATABASE_MAX_CONNS: ${TARGET_DATABASE_MAX_CONNS:-10}
+  DATABASE_MAX_CONN_LIFETIME: ${DATABASE_MAX_CONN_LIFETIME:-30m}
+  DATABASE_MAX_CONN_IDLE_TIME: ${DATABASE_MAX_CONN_IDLE_TIME:-5m}
+  VELMIR_BOOTSTRAP_ADMIN_LOGIN: ${VELMIR_BOOTSTRAP_ADMIN_LOGIN:-}
+  VELMIR_BOOTSTRAP_ADMIN_EMAIL: ${VELMIR_BOOTSTRAP_ADMIN_EMAIL:-}
+  VELMIR_BOOTSTRAP_ADMIN_PASSWORD: ${VELMIR_BOOTSTRAP_ADMIN_PASSWORD:-}
+  VELMIR_BOOTSTRAP_ADMIN_DISPLAY_NAME: ${VELMIR_BOOTSTRAP_ADMIN_DISPLAY_NAME:-Administrator}
+
+x-app-service: &app-service
+  image: ${VELMIR_IMAGE:-velmir:local}
+  build:
+    context: .
+    dockerfile: Dockerfile
+  environment: *app-environment
+
 services:
   admin-db:
-    image: postgres:16
+    image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_USER: velmir
-      POSTGRES_PASSWORD: velmir_local_only
-      POSTGRES_DB: velmir_admin
-    ports:
-      - "127.0.0.1:5432:5432"
+      POSTGRES_USER: ${POSTGRES_USER:-}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+      POSTGRES_DB: ${POSTGRES_DB:-}
     volumes:
       - admin-db-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U velmir -d velmir_admin"]
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 12
       start_period: 10s
 
-  target-db:
-    image: postgres:16
+  migrate:
+    <<: *app-service
+    entrypoint: ["/usr/local/bin/velmir-migrate"]
+    depends_on:
+      admin-db:
+        condition: service_healthy
+
+  bootstrap:
+    <<: *app-service
+    entrypoint: ["/usr/local/bin/velmir-bootstrap"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  app:
+    <<: *app-service
+    init: true
     restart: unless-stopped
-    environment:
-      POSTGRES_USER: velmir_target_admin
-      POSTGRES_PASSWORD: target_admin_local_only
-      POSTGRES_DB: velmir_demo
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      bootstrap:
+        condition: service_completed_successfully
     ports:
-      - "127.0.0.1:5433:5432"
-    volumes:
-      - target-db-data:/var/lib/postgresql/data
-      - ./docker/target-db/init:/docker-entrypoint-initdb.d:ro
+      - "127.0.0.1:${VELMIR_HTTP_PORT:-8080}:8080"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U velmir_target_admin -d velmir_demo"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/readyz"]
       interval: 5s
-      timeout: 5s
-      retries: 5
+      timeout: 3s
+      retries: 12
       start_period: 10s
+    stop_grace_period: 15s
+    security_opt:
+      - no-new-privileges:true
 
 volumes:
   admin-db-data:
-  target-db-data:

@@ -10,26 +10,120 @@ Velmir is a metadata-driven PostgreSQL admin panel. The current stage provides s
 - Node.js and npm
 - Docker with Docker Compose
 
-## Local startup
+## Docker Compose
 
-From the repository root in PowerShell:
+A single image has three stages: Node.js runs `npm ci`, type-check and the Vue build; Go builds the server, migrate, bootstrap and users CLIs; the minimal Alpine runtime contains only a non-root process, CA certificates, admin migrations and the compiled frontend. Frontend sources, `.env`, and Node/Go toolchains are not copied into runtime.
+
+```text
+admin-db ──healthy──> migrate ──completed──> bootstrap ──completed──> app
+                                                                    ├─ /api/*
+                                                                    └─ Vue + SPA fallback
+The demo override also creates an isolated target-db; app uses one TARGET_DATABASE_URL.
+```
+
+### One-command demo
+
+No `.env` setup is required for the demo:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.demo.yml up --build -d
+```
+
+Open `http://127.0.0.1:8080`. With an empty admin database, the **localhost-only demo** creates login `admin` with password `admin`; a warning is logged without repeating the password. Do not expose this mode to a network or reuse demo credentials in production. The demo is enabled only by the explicit second `-f`; target is published at `127.0.0.1:5433` for local integration tests. Admin DB is not published.
+
+### Production
+
+1. Copy `.env.docker.example` to the root `.env`, replace placeholders, set a long random `POSTGRES_PASSWORD`, a matching `ADMIN_DATABASE_URL`, and secure bootstrap credentials. URL-encode passwords inside DSNs.
+2. Optionally set `TARGET_DATABASE_URL`. Without it, auth/admin UI still works, but target resources are not configured.
+3. Start the stack:
+
+```bash
+docker compose up --build -d
+```
+
+HTTP is published only as `127.0.0.1:${VELMIR_HTTP_PORT:-8080}`. Production expects an external HTTPS terminator on the same origin; `APP_ENV=production` requires `SESSION_COOKIE_SECURE=true` and the built frontend, and rejects insecure configuration. Direct HTTP is unsuitable for production login with Secure cookies. No credential-bearing wildcard CORS is used.
+
+After the first successful start, remove `VELMIR_BOOTSTRAP_ADMIN_LOGIN`, `VELMIR_BOOTSTRAP_ADMIN_PASSWORD`, and legacy `VELMIR_BOOTSTRAP_ADMIN_EMAIL` from `.env` and the environment, then run `docker compose up -d`. While any user exists, bootstrap creates nothing, changes no password, and does not require these variables.
+
+| Situation | Bootstrap result |
+|---|---|
+| Production, no users, secure login/password set | One admin with the `admin` role |
+| Production, no users, missing/weak credentials or `admin/admin` | Failure; app does not start or become ready |
+| Demo, no users, empty variables | `admin/admin`, only with `development + VELMIR_DEMO_MODE=true` |
+| Users already exist | Nothing is created or reset; reruns are idempotent |
+
+### Compose operations
+
+```bash
+docker compose ps
+docker compose logs -f app
+docker compose logs bootstrap
+docker compose stop                 # keep containers and named volumes
+docker compose down                 # remove containers/network, keep named volumes
+docker compose up -d                # restart without rebuilding
+docker compose up --build -d        # update the image from current sources
+```
+
+`admin-db-data` and demo `target-db-data` survive `stop`, `down`, restarts, and repeated migrate/bootstrap. Backup/restore is planned for H2.
+
+### Complete environment table
+
+The root `.env` is used for Docker Compose interpolation and by local Go CLIs through `godotenv`. `frontend/.env` is only for Vite development. Below, **dev** means local backend/Vite, **prod** means the main Compose file, and **demo** means the demo override. “Secret” means the value must not be committed or logged.
+
+| Variable | Purpose | Required | Default | Allowed values | Mode | Secret | Safe example |
+|---|---|---|---|---|---|---|---|
+| `POSTGRES_DB` | Admin DB name | prod: yes; demo: fixed | none | PostgreSQL DB name | prod/demo | no | `velmir_admin` |
+| `POSTGRES_USER` | Admin DB role | prod: yes; demo: fixed | none | PostgreSQL role name | prod/demo | no | `velmir` |
+| `POSTGRES_PASSWORD` | Admin DB password | prod: yes; demo: local-only | none | Non-empty random password | prod/demo | **yes** | `<long-random-password>` |
+| `ADMIN_DATABASE_URL` | Admin DSN for every Go process | prod/dev: yes; demo: fixed | none | PostgreSQL DSN | all | **yes** | `postgresql://velmir:<password>@admin-db:5432/velmir_admin?sslmode=disable` |
+| `TARGET_DATABASE_URL` | Single DSN for read/mutation target pools | no | empty | PostgreSQL DSN | all | **yes** | `postgresql://app:<password>@target-db:5432/app?sslmode=require` |
+| `VELMIR_DEPRECATED_TARGET_WRITE_DATABASE_URL` | Compose-only legacy value forwarding for migration error; not a pool DSN | no; do not set manually | empty | Any non-empty value fails | prod/demo compatibility | **yes** | empty |
+| `APP_ENV` | Security mode | no | backend: `development`; Compose: `production` | `development`, `production` | all | no | `production` |
+| `SESSION_COOKIE_SECURE` | Secure cookie flag | prod: `true` | backend: `false`; Compose: `true` | `true`, `false` | all | no | `true` |
+| `VELMIR_BOOTSTRAP_ADMIN_LOGIN` | First admin login | Only for empty prod DB | none; demo: `admin` | Up to 254 characters, no whitespace | all | no | `admin` |
+| `VELMIR_BOOTSTRAP_ADMIN_PASSWORD` | First admin password | Only for empty prod DB | none; demo: `admin` | Prod: 12–1024, non-trivial | all | **yes** | `<long-random-password>` |
+| `VELMIR_BOOTSTRAP_ADMIN_DISPLAY_NAME` | First admin display name | no | `Administrator` | Up to 200 characters | all | no | `Administrator` |
+| `VELMIR_BOOTSTRAP_ADMIN_EMAIL` | Legacy login fallback | no | empty | Same as login; conflicts are rejected | all | no | `admin@example.test` |
+| `VELMIR_DEMO_MODE` | Allow demo-only bootstrap | Demo override only | `false` | `true` only with development | demo | no | `true` |
+| `VELMIR_HTTP_PORT` | Host HTTP port | no | `8080` | 1–65535 | prod/demo | no | `8080` |
+| `VELMIR_TARGET_PORT` | Host demo target port | no | `5433` | 1–65535 | demo | no | `5433` |
+| `VELMIR_IMAGE` | Application image name | no | `velmir:local` | Docker image reference | prod/demo | no | `velmir:local` |
+| `HTTP_ADDR` | Backend listen address | no | `127.0.0.1:8080`; Compose: `0.0.0.0:8080` | `host:port` | dev; fixed by Compose | no | `127.0.0.1:8080` |
+| `FRONTEND_DIST_PATH` | Built Vue directory | prod: yes | dev: empty; image: `/app/frontend/dist` | Existing directory with `index.html` | all | no | `/app/frontend/dist` |
+| `LOG_LEVEL` | Structured log level | no | `info` | `debug`, `info`, `warn`, `error` | all | no | `info` |
+| `SESSION_IDLE_TIMEOUT` | Idle session lifetime | no | `30m` | Positive Go duration | all | no | `30m` |
+| `SESSION_ABSOLUTE_TIMEOUT` | Absolute session lifetime | no | `24h` | Go duration, at least idle | all | no | `24h` |
+| `DATABASE_CONNECT_TIMEOUT` | New DB connection timeout | no | `5s` | Positive Go duration | all | no | `5s` |
+| `ADMIN_DATABASE_MAX_CONNS` | Max admin pool connections | no | `10` | Positive integer | all | no | `10` |
+| `TARGET_DATABASE_MAX_CONNS` | Max connections per target pool | no | `10` | Positive integer | all | no | `10` |
+| `DATABASE_MAX_CONN_LIFETIME` | Max connection lifetime | no | `30m` | Positive Go duration | all | no | `30m` |
+| `DATABASE_MAX_CONN_IDLE_TIME` | Max idle connection time | no | `5m` | Positive Go duration | all | no | `5m` |
+| `HTTP_READ_HEADER_TIMEOUT` | Read headers timeout | no | `5s` | Positive Go duration | all | no | `5s` |
+| `HTTP_READ_TIMEOUT` | Read request timeout | no | `15s` | Positive Go duration | all | no | `15s` |
+| `HTTP_WRITE_TIMEOUT` | Write response timeout | no | `30s` | Positive Go duration | all | no | `30s` |
+| `HTTP_IDLE_TIMEOUT` | Keep-alive idle timeout | no | `60s` | Positive Go duration | all | no | `60s` |
+| `HTTP_SHUTDOWN_TIMEOUT` | Graceful SIGTERM shutdown | no | `10s` | Positive Go duration | all | no | `10s` |
+| `HTTP_MAX_JSON_BODY_SIZE` | Global JSON body limit | no | `1048576` | Positive number of bytes | all | no | `1048576` |
+
+For `cmd/users`, the password is accepted only through the optional secret `VELMIR_USER_PASSWORD` (12–1024 characters), never a CLI argument. Frontend development additionally uses non-secret `VITE_BACKEND_BASE_URL=` (same-origin) and `VITE_BACKEND_PROXY_TARGET=http://127.0.0.1:8080` (Vite proxy only).
+
+The production image builds the frontend with an empty same-origin API URL, so it does not need `VITE_BACKEND_BASE_URL`. Compose DSNs use the `admin-db` and `target-db` DNS service names: `localhost` inside a container would mean that container itself. Never commit root/frontend `.env`, real DSNs, `POSTGRES_PASSWORD`, bootstrap/user passwords, or session/CSRF tokens. `.env.docker.example` contains placeholders only.
+
+**Breaking config migration:** remove `TARGET_WRITE_DATABASE_URL` and merge the old settings into one `TARGET_DATABASE_URL` pointing to a role with the required privileges. A non-empty legacy variable produces an explicit migration error; it is never silently ignored. No separate writer DSN is used anywhere.
+
+### Local Vite development
 
 ```powershell
 Copy-Item .env.example .env
-docker compose up -d admin-db target-db
-```
-
-Before the first backend start, set `VELMIR_BOOTSTRAP_ADMIN_EMAIL` and `VELMIR_BOOTSTRAP_ADMIN_PASSWORD` in `.env` to a unique administrator email and a long random password of at least 12 characters. Do not use a default password. Apply migrations to the admin database and start the backend:
-
-```powershell
+docker compose -f docker-compose.yml -f docker-compose.demo.yml up -d admin-db target-db
 Set-Location backend
 go run ./cmd/migrate
+# Set secure VELMIR_BOOTSTRAP_ADMIN_LOGIN/PASSWORD before the first bootstrap.
+go run ./cmd/bootstrap
 go run ./cmd/server
 ```
 
-When the admin database contains no users, server startup creates the first administrator once and logs a reminder without logging the password. **After the administrator is created, remove both bootstrap variables from `.env` and the process environment, then restart the backend.** Subsequent startups do not create another user while any user exists. Startup fails with an actionable error if the database is empty and bootstrap values are missing. Public registration is unavailable; administrators create additional accounts through the UI or CLI.
-
-In a second terminal, start the frontend:
+In a second terminal:
 
 ```powershell
 Set-Location frontend
@@ -38,9 +132,9 @@ npm ci
 npm run dev
 ```
 
-The backend listens on `http://127.0.0.1:8080` by default and remains local-only unless `HTTP_ADDR` is explicitly changed. Open the Vite URL (normally `http://localhost:5173`), not the backend URL. Vite proxies `/api`, `/healthz` and `/readyz` to `VITE_BACKEND_PROXY_TARGET`, so cookies and API requests use the browser's same origin. `VITE_BACKEND_BASE_URL` stays empty.
+Open the Vite URL (normally `http://localhost:5173`). Vite proxies `/api`, `/healthz`, and `/readyz`; cookies remain same-origin. The production Go server serves `dist`, hashed assets with long-term caching, and `index.html` with `no-cache`; `/api/*` never reaches SPA fallback.
 
-For production, serve the built frontend and backend API through the same HTTPS origin, with SPA fallback for `/login` and `/administration`; keep `VITE_BACKEND_BASE_URL` empty and set `SESSION_COOKIE_SECURE=true`. No CORS wildcard with credentials is used or required.
+**H1 limitations:** external HTTPS/reverse proxy, trusted proxy, CSP/HSTS, Caddy, and backup/restore are outside this stage; there are no automatic target GRANT/DDL statements; field-level permissions are not implemented. **H2:** production TLS/proxy configuration, CSP/HSTS/trusted proxy, Caddy if needed, and verified backup/restore procedures.
 
 ## Interface design and language
 
@@ -68,11 +162,11 @@ The `cmd/users` CLI remains available for local administration and access recove
 ```powershell
 # Create a user; never pass the password as a command-line argument.
 $env:VELMIR_USER_PASSWORD = "<long-random-password>"
-go run ./cmd/users create -email "viewer@example.test" -display-name "Viewer"
+go run ./cmd/users create -login "viewer@example.test" -display-name "Viewer"
 Remove-Item Env:VELMIR_USER_PASSWORD
 
 # Assign a role and list users.
-go run ./cmd/users assign-role -email "viewer@example.test" -role viewer
+go run ./cmd/users assign-role -login "viewer@example.test" -role viewer
 go run ./cmd/users list
 ```
 
@@ -80,27 +174,15 @@ For a local viewer check, these two commands create the account and assign `view
 
 ## Databases and write safety
 
-- **Admin database** (`localhost:5432`, database `velmir_admin`) belongs to Velmir. Goose migrations run only here and create the migration baseline plus `users`, `sessions`, `roles`, `user_roles`, `role_permissions` and `audit_events`.
-- **Demo target database** (`localhost:5433`, database `velmir_demo`) is a separate PostgreSQL instance. Docker initializes demonstration tables, records, a view, primary keys and foreign keys.
-- `TARGET_DATABASE_URL` is the existing read-only target connection. Its pool always sets `default_transaction_read_only=on`; it is used for introspection and record reads and is never reused for mutations.
-- `TARGET_WRITE_DATABASE_URL` is a separate **optional** connection used only for INSERT, UPDATE and DELETE. The example points to the local demo writer role. Leave it empty or remove it to disable all mutation controls and make mutation endpoints return `TARGET_READ_ONLY`.
-- Velmir never runs migrations, automatic GRANT statements or DDL against a target database. Do not point integration tests or either target URL at a real database for local demo setup.
+- **Admin database** (`velmir_admin`) belongs to Velmir. The separate migrate CLI applies Goose migrations only here and creates `users`, `sessions`, `roles`, `user_roles`, `role_permissions`, and `audit_events`.
+- **Demo target database** (`velmir_demo`) is a separate PostgreSQL created only by the demo override. Existing initialization fixtures create demo tables, records, a view, PK/FK, and local roles; no later automatic GRANT runs.
+- `TARGET_DATABASE_URL` is the single optional DSN. It creates two pools: the read pool always sets `default_transaction_read_only=on`, while the mutation pool is used only for supported INSERT/UPDATE/DELETE after RBAC/CSRF checks.
+- `write_enabled` depends on target configuration and effective Velmir permissions. Actual mutation capability is also constrained by PostgreSQL role privileges; viewer remains read-only through Velmir authorization even with a fully privileged DSN.
+- Velmir never runs migrations, automatic GRANT, DDL, or arbitrary SQL against a target database. Never point integration tests or a target URL at a real database for local demo setup.
 
-The demo `velmir_writer` role has only:
+For full CRUD, the target database owner grants the application role only the required privileges in advance: `CONNECT` on the database, `USAGE` on used schemas, `SELECT` for reads, `INSERT`, `UPDATE`, `DELETE` on allowed tables, and `USAGE`, `SELECT`, `UPDATE` on sequences required for default/identity values. A read-only role needs only `CONNECT`, schema `USAGE`, and `SELECT`. The application needs no `CREATE`, `ALTER`, `DROP`, or `TRUNCATE`. Velmir never grants privileges itself.
 
-- `CONNECT` on `velmir_demo` and `USAGE` on schema `public`;
-- `SELECT`, `INSERT`, `UPDATE`, `DELETE` on the existing demo tables;
-- `USAGE`, `SELECT`, `UPDATE` on the existing demo sequences, required for identity/default sequence values.
-
-It has no `CREATE`, `ALTER`, `DROP` or `TRUNCATE` privilege. The `velmir_readonly` role retains read-only transactions and SELECT privileges. For an already initialized **local-only** `velmir_demo`, the owner can grant DELETE once without recreating the volume:
-
-```powershell
-docker compose exec target-db psql -U velmir_target_admin -d velmir_demo -v ON_ERROR_STOP=1 -c "GRANT DELETE ON ALL TABLES IN SCHEMA public TO velmir_writer;"
-```
-
-Do not run this command against a real database. In production, the database owner configures the required privileges manually; the application never grants them automatically.
-
-To run without a target database, leave `TARGET_DATABASE_URL` empty. The backend still starts, readiness reports `not_configured`, and `/api/schema` returns `TARGET_NOT_CONFIGURED`.
+Without `TARGET_DATABASE_URL`, the backend starts, readiness reports `not_configured`, and `/api/schema` returns `TARGET_NOT_CONFIGURED`. A configured but unavailable target is explicitly `unavailable` and makes `/readyz` fail; `/healthz` remains an independent liveness check.
 
 ## Creating, editing and deleting records
 
@@ -146,20 +228,9 @@ For a row with a primary key, **History** opens a generic panel with the actor, 
 
 The target mutation commits in the target database before audit is written to the admin database; there is no cross-database atomicity. If audit fails after commit, the API returns `AUDIT_WRITE_FAILED` with `mutation_committed=true`, and the frontend explains that the change was applied and refreshes data. DELETE has a distinct warning: the record is already deleted, but its history event may not have been recorded. There is no automatic POST/PATCH/DELETE retry or compensating DELETE/UPDATE/INSERT. See `docs/api_en.md` for the full schema, history contract and limitations.
 
-## Demo target reset
+## Demo target persistence
 
-Initialization scripts run only when Docker creates a new target data volume. For DELETE on an already initialized local volume, use the one-time GRANT from “Databases and write safety”; recreating the volume is not required.
-
-The following commands destroy **only the local `velmir_demo` target container and its demo volume**. They do not remove the admin database volume. Do not use them for a real database:
-
-```powershell
-docker compose stop target-db
-docker compose rm -f target-db
-docker volume rm velmir_target-db-data
-docker compose up -d target-db
-```
-
-If the Compose project name is not `velmir`, replace the volume prefix with the name shown by `docker volume ls`.
+Demo target initialization fixtures run only when a new named volume is created. Use ordinary `stop`, `down`, and repeated `up` to preserve admin/demo data; H1 does not require volume deletion.
 
 ## Checks
 
@@ -182,22 +253,18 @@ Integration tests are excluded from unit tests by the `integration` build tag. R
 
 ```powershell
 Set-Location backend
-$env:TEST_TARGET_DATABASE_URL = "postgresql://velmir_readonly:velmir_readonly_local_only@localhost:5433/velmir_demo?sslmode=disable"
+$env:TEST_TARGET_DATABASE_URL = "postgresql://velmir_writer:velmir_writer_local_only@localhost:5433/velmir_demo?sslmode=disable"
 go test -tags=integration ./internal/introspection -v -timeout 30s
 go test -tags=integration ./internal/records -v -timeout 30s
-
-$env:TEST_TARGET_WRITE_DATABASE_URL = "postgresql://velmir_writer:velmir_writer_local_only@localhost:5433/velmir_demo?sslmode=disable"
-go test -tags=integration ./internal/records -run TestWriterDemoDatabase -v -timeout 30s
 
 $env:TEST_ADMIN_DATABASE_URL = "postgresql://velmir:velmir_local_only@localhost:5432/velmir_admin?sslmode=disable"
 go test -tags=integration ./internal/auth -v -timeout 30s
 go test -tags=integration ./internal/httpapi -v -timeout 60s
 
-# Full run with all three local test URLs already set.
+# Full run with both local test URLs already set.
 go test -tags=integration ./... -v -timeout 60s
 Remove-Item Env:TEST_ADMIN_DATABASE_URL
 Remove-Item Env:TEST_TARGET_DATABASE_URL
-Remove-Item Env:TEST_TARGET_WRITE_DATABASE_URL
 ```
 
 The writer and history integration tests create, update and delete demo records, including simple/composite PKs, FK errors and audit failure after commit. Some audit-failure fixtures intentionally remain in the demo database. The tests refuse non-local hosts and databases other than `velmir_demo`.

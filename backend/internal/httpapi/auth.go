@@ -64,7 +64,7 @@ func login(service authService, provider permissionProvider, secureCookies bool)
 		decoder.DisallowUnknownFields()
 		var request loginRequest
 		if err := decoder.Decode(&request); err != nil || request.Email == "" || request.Password == "" || len(request.Email) > 254 || len(request.Password) > 1024 {
-			writeJSON(w, http.StatusBadRequest, errorResponse{Error: apiError{Code: "INVALID_LOGIN_REQUEST", Message: "Email and password are required"}})
+			writeJSON(w, http.StatusBadRequest, errorResponse{Error: apiError{Code: "INVALID_LOGIN_REQUEST", Message: "Login and password are required"}})
 			return
 		}
 		var extra any
@@ -77,7 +77,7 @@ func login(service authService, provider permissionProvider, secureCookies bool)
 		defer cancel()
 		result, err := service.Login(ctx, request.Email, request.Password, r.RemoteAddr)
 		if errors.Is(err, auth.ErrInvalidCredentials) {
-			writeJSON(w, http.StatusUnauthorized, errorResponse{Error: apiError{Code: "INVALID_CREDENTIALS", Message: "Invalid email or password"}})
+			writeJSON(w, http.StatusUnauthorized, errorResponse{Error: apiError{Code: "INVALID_CREDENTIALS", Message: "Invalid login or password"}})
 			return
 		}
 		if errors.Is(err, auth.ErrTooManyAttempts) {

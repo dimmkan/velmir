@@ -35,14 +35,12 @@ func (failingAuditStore) Record(context.Context, audit.Input) error {
 
 func TestLocalDatabasesRecordHistory(t *testing.T) {
 	adminURL := os.Getenv("TEST_ADMIN_DATABASE_URL")
-	readURL := os.Getenv("TEST_TARGET_DATABASE_URL")
-	writeURL := os.Getenv("TEST_TARGET_WRITE_DATABASE_URL")
-	if adminURL == "" || readURL == "" || writeURL == "" {
-		t.Skip("TEST_ADMIN_DATABASE_URL, TEST_TARGET_DATABASE_URL and TEST_TARGET_WRITE_DATABASE_URL are not set")
+	databaseURL := os.Getenv("TEST_TARGET_DATABASE_URL")
+	if adminURL == "" || databaseURL == "" {
+		t.Skip("TEST_ADMIN_DATABASE_URL and TEST_TARGET_DATABASE_URL are not set")
 	}
 	assertHistoryDatabaseURL(t, adminURL, "velmir_admin")
-	assertHistoryDatabaseURL(t, readURL, "velmir_demo")
-	assertHistoryDatabaseURL(t, writeURL, "velmir_demo")
+	assertHistoryDatabaseURL(t, databaseURL, "velmir_demo")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Second)
 	defer cancel()
@@ -56,12 +54,17 @@ func TestLocalDatabasesRecordHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer adminTx.Rollback(ctx)
-	readPool, err := pgxpool.New(ctx, readURL)
+	readConfig, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readConfig.ConnConfig.RuntimeParams["default_transaction_read_only"] = "on"
+	readPool, err := pgxpool.NewWithConfig(ctx, readConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer readPool.Close()
-	writePool, err := pgxpool.New(ctx, writeURL)
+	writePool, err := pgxpool.New(ctx, databaseURL)
 	if err != nil {
 		t.Fatal(err)
 	}

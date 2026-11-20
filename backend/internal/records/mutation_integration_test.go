@@ -18,22 +18,25 @@ import (
 )
 
 func TestWriterDemoDatabase(t *testing.T) {
-	readURL := os.Getenv("TEST_TARGET_DATABASE_URL")
-	writeURL := os.Getenv("TEST_TARGET_WRITE_DATABASE_URL")
-	if readURL == "" || writeURL == "" {
-		t.Skip("TEST_TARGET_DATABASE_URL and TEST_TARGET_WRITE_DATABASE_URL are not set")
+	databaseURL := os.Getenv("TEST_TARGET_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_TARGET_DATABASE_URL is not set")
 	}
-	assertLocalDemoURL(t, readURL)
-	assertLocalDemoURL(t, writeURL)
+	assertLocalDemoURL(t, databaseURL)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	readDatabase, err := pgxpool.New(ctx, readURL)
+	readConfig, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readConfig.ConnConfig.RuntimeParams["default_transaction_read_only"] = "on"
+	readDatabase, err := pgxpool.NewWithConfig(ctx, readConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer readDatabase.Close()
-	writeDatabase, err := pgxpool.New(ctx, writeURL)
+	writeDatabase, err := pgxpool.New(ctx, databaseURL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,6 +46,11 @@ func TestWriterDemoDatabase(t *testing.T) {
 	}
 	if err := writeDatabase.Ping(ctx); err != nil {
 		t.Fatal(err)
+	}
+	readOnlyProbe := fmt.Sprintf("read-only-probe-%d", time.Now().UnixNano())
+	if _, err := readDatabase.Exec(ctx, "INSERT INTO public.authors (name) VALUES ($1)", readOnlyProbe); err == nil {
+		_, _ = writeDatabase.Exec(ctx, "DELETE FROM public.authors WHERE name = $1", readOnlyProbe)
+		t.Fatal("read pool unexpectedly allowed an INSERT")
 	}
 
 	catalog, err := introspection.New(readDatabase).Inspect(ctx)

@@ -327,7 +327,7 @@ Create/delete связей аудируются как обычные `create`/`
 
 ## POST /api/resources/{schema}/{resource}/records
 
-Создаёт запись в таблице. Требуются право `create` для ресурса и действительный CSRF token; без права возвращается HTTP 403 `FORBIDDEN`. Endpoint доступен только при настроенном `TARGET_WRITE_DATABASE_URL`; интроспекция и проверка идентификаторов по-прежнему используют свежие метаданные, прочитанные через `TARGET_DATABASE_URL`.
+Создаёт запись в таблице. Требуются право `create` для ресурса и действительный CSRF token; без права возвращается HTTP 403 `FORBIDDEN`. Чтение метаданных и mutation используют отдельные пулы, созданные из одного `TARGET_DATABASE_URL`. Роль PostgreSQL должна получить необходимые права от владельца target database.
 
 Тело запроса:
 
@@ -379,7 +379,7 @@ Create/delete связей аудируются как обычные `create`/`
 
 ## DELETE /api/resources/{schema}/{resource}/records/{key}
 
-Удаляет одну запись таблицы и возвращает HTTP 204 без тела. Требуются session, отдельное право `delete` для ресурса и действительный CSRF token. Endpoint использует только `TARGET_WRITE_DATABASE_URL`; без writer DSN возвращается HTTP 403 `TARGET_READ_ONLY`. Read pool никогда не используется для удаления.
+Удаляет одну запись таблицы и возвращает HTTP 204 без тела. Требуются session, отдельное право `delete` для ресурса и действительный CSRF token. Mutation pool создаётся из того же `TARGET_DATABASE_URL`; read pool остаётся read-only и никогда не используется для удаления.
 
 `{key}` имеет тот же URL-кодированный JSON-формат, что и PATCH, и поддерживает simple/composite PK. Schema, resource и PK проверяются по свежему metadata allowlist. Идентификаторы quoting, значения передаются только как SQL parameters. Представления и таблицы без PK возвращают `RESOURCE_READ_ONLY`. Тело запроса не используется. Bulk delete и удаление нескольких записей одним запросом не поддерживаются.
 
@@ -402,7 +402,7 @@ Backend выполняет `DELETE … RETURNING` и получает факти
 ```
 
 - HTTP 400: `INVALID_RECORD`, `INVALID_RECORD_KEY`, `NOT_NULL_VIOLATION`, `FOREIGN_KEY_VIOLATION` или `CHECK_VIOLATION`.
-- HTTP 403: `FORBIDDEN`, если отсутствует требуемое право; `CSRF_TOKEN_INVALID`, если CSRF token отсутствует или неверен; `TARGET_READ_ONLY`, если `TARGET_WRITE_DATABASE_URL` отсутствует. Read pool остаётся read-only.
+- HTTP 403: `FORBIDDEN`, если отсутствует требуемое право; `CSRF_TOKEN_INVALID`, если CSRF token отсутствует или неверен. Read pool остаётся read-only, а database privileges дополнительно ограничивают mutations.
 - HTTP 404: `RESOURCE_NOT_FOUND` или `RECORD_NOT_FOUND`.
 - HTTP 409: `RESOURCE_READ_ONLY` или `UNIQUE_VIOLATION`.
 - HTTP 503: `TARGET_NOT_CONFIGURED`.

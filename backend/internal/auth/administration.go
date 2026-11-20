@@ -61,7 +61,7 @@ func (s *Administration) ListUsers(ctx context.Context) ([]UserSummary, error) {
 }
 
 func (s *Administration) CreateUser(ctx context.Context, email, displayName, password string) (UserSummary, error) {
-	if _, err := validateNewUserEmail(email); err != nil {
+	if _, err := validateNewUserLogin(email); err != nil {
 		return UserSummary{}, &AdminValidationError{Field: "email", Message: err.Error()}
 	}
 	if err := validateNewUserPassword(password); err != nil {

@@ -31,7 +31,7 @@ function submit() {
       <form class="login-form" @submit.prevent="submit">
         <label>
           <span>{{ t('auth.email') }}</span>
-          <input v-model="email" type="email" name="email" autocomplete="username" required autofocus :disabled="pending" />
+          <input v-model="email" type="text" name="username" autocomplete="username" required autofocus :disabled="pending" />
         </label>
         <label>
           <span>{{ t('auth.password') }}</span>

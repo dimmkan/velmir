@@ -237,7 +237,7 @@ onMounted(load)
         <form class="admin-panel admin-form" @submit.prevent="submitUser">
           <h3>{{ t('administration.createUser') }}</h3>
           <div class="admin-form-grid">
-            <label>{{ t('auth.email') }}<input v-model="createForm.email" type="email" autocomplete="off" :disabled="Boolean(operation)" /></label>
+            <label>{{ t('auth.email') }}<input v-model="createForm.email" type="text" autocomplete="off" :disabled="Boolean(operation)" /></label>
             <label>{{ t('administration.displayName') }}<input v-model="createForm.display_name" :disabled="Boolean(operation)" /></label>
             <label>{{ t('auth.password') }}<input v-model="createForm.password" type="password" autocomplete="new-password" :disabled="Boolean(operation)" /></label>
           </div>

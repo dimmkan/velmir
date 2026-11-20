@@ -45,7 +45,7 @@ export class AdminRequestError extends Error {
 export function validateUserForm(form: UserForm): FormErrors {
   const errors: FormErrors = {}
   const email = form.email.trim()
-  if (!email || email.length > 254 || !/^[^\s@]+@[^\s@]+$/.test(email)) {
+  if (!email || email.length > 254 || /\s/.test(email)) {
     errors.email = 'validation.email'
   }
   if (form.display_name.trim().length > 200) errors.display_name = 'validation.displayNameLength'

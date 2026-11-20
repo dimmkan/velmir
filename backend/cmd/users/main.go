@@ -11,10 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-
 	"velmir/backend/internal/auth"
 	"velmir/backend/internal/config"
+	"velmir/backend/internal/database"
 )
 
 const userCommandTimeout = 30 * time.Second
@@ -36,9 +35,15 @@ func run(args []string, output io.Writer) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), userCommandTimeout)
 	defer cancel()
-	db, err := pgxpool.New(ctx, cfg.AdminDatabaseURL)
+	db, err := database.NewAdminPool(ctx, database.PoolOptions{
+		AdminDatabaseURL: cfg.AdminDatabaseURL,
+		ConnectTimeout:   cfg.DatabaseConnectTimeout,
+		AdminMaxConns:    cfg.AdminDatabaseMaxConns,
+		MaxConnLifetime:  cfg.DatabaseMaxConnLifetime,
+		MaxConnIdleTime:  cfg.DatabaseMaxConnIdleTime,
+	})
 	if err != nil {
-		return fmt.Errorf("open admin database: %w", err)
+		return err
 	}
 	defer db.Close()
 	if err := db.Ping(ctx); err != nil {
@@ -59,19 +64,24 @@ func run(args []string, output io.Writer) error {
 
 func createUser(ctx context.Context, db auth.DBTX, output io.Writer, args []string) error {
 	flags := flag.NewFlagSet("users create", flag.ContinueOnError)
-	email := flags.String("email", "", "user email")
+	login := flags.String("login", "", "user login")
+	legacyEmail := flags.String("email", "", "legacy alias for -login")
 	displayName := flags.String("display-name", "", "display name")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
-		return errors.New("usage: users create -email EMAIL [-display-name NAME]; password is read from VELMIR_USER_PASSWORD")
+		return errors.New("usage: users create -login LOGIN [-display-name NAME]; password is read from VELMIR_USER_PASSWORD")
+	}
+	resolvedLogin, err := resolveLogin(*login, *legacyEmail)
+	if err != nil {
+		return err
 	}
 	password := os.Getenv("VELMIR_USER_PASSWORD")
 	if password == "" {
 		return errors.New("VELMIR_USER_PASSWORD is required; do not pass the password as a command-line argument")
 	}
-	user, err := auth.CreateUser(ctx, db, *email, *displayName, password)
+	user, err := auth.CreateUser(ctx, db, resolvedLogin, *displayName, password)
 	if err != nil {
 		return err
 	}
@@ -81,19 +91,36 @@ func createUser(ctx context.Context, db auth.DBTX, output io.Writer, args []stri
 
 func assignRole(ctx context.Context, db auth.TxBeginner, output io.Writer, args []string) error {
 	flags := flag.NewFlagSet("users assign-role", flag.ContinueOnError)
-	email := flags.String("email", "", "user email")
+	login := flags.String("login", "", "user login")
+	legacyEmail := flags.String("email", "", "legacy alias for -login")
 	role := flags.String("role", "", "existing role name")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
-		return errors.New("usage: users assign-role -email EMAIL -role ROLE")
+		return errors.New("usage: users assign-role -login LOGIN -role ROLE")
 	}
-	if err := auth.AssignRole(ctx, db, *email, *role); err != nil {
+	resolvedLogin, err := resolveLogin(*login, *legacyEmail)
+	if err != nil {
 		return err
 	}
-	_, err := fmt.Fprintf(output, "Assigned role %s to %s\n", strings.TrimSpace(*role), auth.NormalizeEmail(*email))
+	if err := auth.AssignRole(ctx, db, resolvedLogin, *role); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(output, "Assigned role %s to %s\n", strings.TrimSpace(*role), auth.NormalizeEmail(resolvedLogin))
 	return err
+}
+
+func resolveLogin(login, legacyEmail string) (string, error) {
+	login = strings.TrimSpace(login)
+	legacyEmail = strings.TrimSpace(legacyEmail)
+	if login != "" && legacyEmail != "" && !strings.EqualFold(login, legacyEmail) {
+		return "", errors.New("-login and -email conflict; use only -login")
+	}
+	if login == "" {
+		login = legacyEmail
+	}
+	return login, nil
 }
 
 func listUsers(ctx context.Context, db auth.QueryDBTX, output io.Writer, args []string) error {
@@ -108,7 +135,7 @@ func listUsers(ctx context.Context, db auth.QueryDBTX, output io.Writer, args []
 	if err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintln(output, "ID\tEMAIL\tDISPLAY NAME\tACTIVE\tROLES"); err != nil {
+	if _, err := fmt.Fprintln(output, "ID\tLOGIN\tDISPLAY NAME\tACTIVE\tROLES"); err != nil {
 		return err
 	}
 	for _, user := range users {

@@ -33,7 +33,7 @@ type UserSummary struct {
 }
 
 func CreateUser(ctx context.Context, db DBTX, email, displayName, password string) (User, error) {
-	email, err := validateNewUserEmail(email)
+	email, err := validateNewUserLogin(email)
 	if err != nil {
 		return User{}, err
 	}
@@ -132,12 +132,12 @@ func ListUsers(ctx context.Context, db QueryDBTX) ([]UserSummary, error) {
 	return users, nil
 }
 
-func validateNewUserEmail(email string) (string, error) {
-	email = NormalizeEmail(email)
-	if email == "" || len(email) > 254 || !strings.Contains(email, "@") || strings.ContainsAny(email, " \t\r\n") {
-		return "", errors.New("email must be a valid email address")
+func validateNewUserLogin(login string) (string, error) {
+	login = NormalizeEmail(login)
+	if login == "" || len(login) > 254 || strings.ContainsAny(login, " \t\r\n") {
+		return "", errors.New("login must be non-empty, contain no whitespace and not exceed 254 characters")
 	}
-	return email, nil
+	return login, nil
 }
 
 func validateNewUserPassword(password string) error {
