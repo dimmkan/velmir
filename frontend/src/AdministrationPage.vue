@@ -5,6 +5,7 @@ import { authState, getCSRFToken } from './auth'
 import { errorTranslationKey, fieldErrorTranslationKey } from './i18n'
 import {
   AdminRequestError,
+  clonePermissions,
   createAdminClient,
   validateDisplayName,
   validatePassword,
@@ -17,8 +18,10 @@ import {
   type UserForm,
 } from './admin'
 import PermissionEditor from './PermissionEditor.vue'
+import type { SchemaMetadata } from './schema'
 
-const props = defineProps<{ backendBaseURL: string }>()
+const props = withDefaults(defineProps<{ backendBaseURL: string; schemas?: SchemaMetadata[] }>(), { schemas: () => [] })
+const emit = defineEmits<{ 'permissions-saved': [] }>()
 const { t } = useI18n()
 const client = createAdminClient(props.backendBaseURL, getCSRFToken)
 const tab = ref<'users' | 'roles'>('users')
@@ -165,7 +168,7 @@ function selectRole(roleID: number) {
   selectedRoleID.value = role.id
   roleDraft.name = role.name
   roleDraft.description = role.description
-  roleDraft.permissions = role.permissions.map((permission) => ({ ...permission, operations: [...permission.operations] }))
+  roleDraft.permissions = clonePermissions(role.permissions)
   clearErrors(roleErrors)
   actionError.value = ''
 }
@@ -176,11 +179,12 @@ async function submitRole() {
   if (Object.keys(roleErrors).length > 0) return
   operation.value = 'create-role'
   try {
-    const response = await client.createRole({ ...newRole, permissions: newRole.permissions.map((item) => ({ ...item, operations: [...item.operations] })) })
+    const response = await client.createRole({ ...newRole, permissions: clonePermissions(newRole.permissions) })
     newRole.name = ''
     newRole.description = ''
     newRole.permissions = []
     await load()
+    emit('permissions-saved')
     selectRole(response.role.id)
     notice.value = 'administration.roleCreated'
   } catch (error) {
@@ -198,8 +202,9 @@ async function saveRole() {
   operation.value = `save-role-${selectedRole.value.id}`
   try {
     await client.updateRole(selectedRole.value.id, roleDraft.name, roleDraft.description)
-    await client.replacePermissions(selectedRole.value.id, roleDraft.permissions)
+    await client.replacePermissions(selectedRole.value.id, clonePermissions(roleDraft.permissions))
     await load()
+    emit('permissions-saved')
     notice.value = 'administration.roleUpdated'
   } catch (error) {
     showError(error, roleErrors)
@@ -295,7 +300,7 @@ onMounted(load)
             <label>{{ t('administration.name') }}<input v-model="newRole.name" placeholder="content_editor" :disabled="Boolean(operation)" /></label>
             <label>{{ t('administration.roleDescription') }}<input v-model="newRole.description" :disabled="Boolean(operation)" /></label>
           </div>
-          <PermissionEditor :permissions="newRole.permissions" :disabled="Boolean(operation)" @change="newRole.permissions = $event" />
+          <PermissionEditor :permissions="newRole.permissions" :schemas="schemas" :disabled="Boolean(operation)" @change="newRole.permissions = $event" />
           <p v-for="(error, field) in roleErrors" :key="field" class="field-error" role="alert">{{ t(error) }}</p>
           <button type="submit" class="primary-button" :disabled="Boolean(operation)">{{ operation === 'create-role' ? t('administration.creating') : t('administration.createRoleAction') }}</button>
         </form>
@@ -321,7 +326,7 @@ onMounted(load)
             <label>{{ t('administration.name') }}<input v-model="roleDraft.name" :disabled="Boolean(operation)" /></label>
             <label>{{ t('administration.roleDescription') }}<input v-model="roleDraft.description" :disabled="Boolean(operation)" /></label>
           </div>
-          <PermissionEditor :permissions="roleDraft.permissions" :disabled="Boolean(operation)" @change="roleDraft.permissions = $event" />
+          <PermissionEditor :permissions="roleDraft.permissions" :schemas="schemas" :disabled="Boolean(operation)" @change="roleDraft.permissions = $event" />
           <p v-for="(error, field) in roleErrors" :key="field" class="field-error" role="alert">{{ t(error) }}</p>
           <button type="submit" class="primary-button" :disabled="Boolean(operation)">{{ operation ? t('administration.saving') : t('administration.saveRole') }}</button>
         </form>

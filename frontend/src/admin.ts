@@ -1,4 +1,4 @@
-import type { PermissionOperation, ResourcePermission } from './auth'
+import type { FieldPermissionAction, PermissionOperation, ResourcePermission } from './auth'
 
 export interface AdminUser {
   id: number
@@ -29,6 +29,25 @@ export interface RoleForm {
 }
 
 export type FormErrors = Record<string, string>
+
+export function clonePermissions(permissions: ResourcePermission[]): ResourcePermission[] {
+  return permissions.map((permission) => ({
+    ...permission,
+    operations: [...permission.operations],
+    field_permissions: permission.field_permissions?.map((fieldPermission) => ({
+      ...fieldPermission,
+      columns: [...fieldPermission.columns],
+    })),
+  }))
+}
+
+export function fieldPermission(permission: ResourcePermission, action: FieldPermissionAction) {
+  return permission.field_permissions?.find((fieldPermission) => fieldPermission.action === action) ?? {
+    action,
+    mode: 'unrestricted' as const,
+    columns: [],
+  }
+}
 
 export class AdminRequestError extends Error {
   constructor(
@@ -93,6 +112,16 @@ export function validateRoleForm(form: RoleForm): FormErrors {
     if (permission.operations.length === 0 || new Set(permission.operations).size !== permission.operations.length ||
       permission.operations.some((operation) => !['read', 'create', 'update', 'delete'].includes(operation))) {
       errors.permissions = 'validation.permissionOperations'
+      break
+    }
+    const fields = permission.field_permissions ?? []
+    const fieldActions = fields.map((field) => field.action)
+    if ((schema === '*' && fields.length > 0) || fields.length > 2 || new Set(fieldActions).size !== fieldActions.length ||
+      fields.some((field) => !permission.operations.includes(field.action) ||
+        (field.mode === 'unrestricted' && field.columns.length > 0) ||
+        (field.mode === 'allowlist' && (field.columns.length > 1000 || new Set(field.columns).size !== field.columns.length ||
+          field.columns.some((column) => !column.trim() || column.length > 255))))) {
+      errors.permissions = 'validation.permissionFields'
       break
     }
   }

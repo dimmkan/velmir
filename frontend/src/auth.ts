@@ -9,10 +9,20 @@ export interface AuthUser {
 
 export type PermissionOperation = 'read' | 'create' | 'update' | 'delete'
 
+export type FieldPermissionAction = 'create' | 'update'
+export type FieldPermissionMode = 'unrestricted' | 'allowlist'
+
+export interface FieldPermission {
+  action: FieldPermissionAction
+  mode: FieldPermissionMode
+  columns: string[]
+}
+
 export interface ResourcePermission {
   schema: string
   resource: string
   operations: PermissionOperation[]
+  field_permissions?: FieldPermission[]
 }
 
 export type AuthStatus = 'loading' | 'authenticated' | 'anonymous' | 'error'
@@ -162,6 +172,10 @@ export function createAuthStore(backendBaseURL = '') {
     state.permissions = body.permissions.map((permission) => ({
       ...permission,
       operations: [...permission.operations],
+      field_permissions: permission.field_permissions?.map((fieldPermission) => ({
+        ...fieldPermission,
+        columns: [...fieldPermission.columns],
+      })),
     }))
     state.can_admin = body.can_admin
     state.status = 'authenticated'
@@ -218,7 +232,15 @@ function isAuthResponse(value: unknown): value is AuthResponse {
 
 function isResourcePermission(value: unknown): value is ResourcePermission {
   if (!isRecord(value) || typeof value.schema !== 'string' || typeof value.resource !== 'string' || !Array.isArray(value.operations)) return false
-  return value.operations.every((operation) => operation === 'read' || operation === 'create' || operation === 'update' || operation === 'delete')
+  if (!value.operations.every((operation) => operation === 'read' || operation === 'create' || operation === 'update' || operation === 'delete')) return false
+  if (value.field_permissions === undefined) return true
+  return Array.isArray(value.field_permissions) && value.field_permissions.every((fieldPermission) =>
+    isRecord(fieldPermission) &&
+    (fieldPermission.action === 'create' || fieldPermission.action === 'update') &&
+    (fieldPermission.mode === 'unrestricted' || fieldPermission.mode === 'allowlist') &&
+    Array.isArray(fieldPermission.columns) &&
+    fieldPermission.columns.every((column) => typeof column === 'string'),
+  )
 }
 
 function readErrorCode(value: unknown, fallback: string) {

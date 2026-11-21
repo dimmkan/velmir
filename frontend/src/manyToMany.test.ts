@@ -176,4 +176,29 @@ describe('generic many-to-many detection', () => {
     expect(canRemoveManyToManyRelation(relation, true)).toBe(true)
     expect(canRemoveManyToManyRelation(relation, false)).toBe(false)
   })
+
+  it('requires every junction FK column in effective creatable fields', () => {
+    const relation = detectManyToManyRelation('public', parents, 'public', junction, schemas)!
+    authState.permissions = [
+      { schema: 'public', resource: 'parents', operations: ['read'] },
+      { schema: 'public', resource: 'targets', operations: ['read'] },
+      { schema: 'public', resource: 'parent_targets', operations: ['read', 'create', 'delete'] },
+    ]
+    const restricted = {
+      ...relation,
+      junctionResource: {
+        ...relation.junctionResource,
+        creatable_fields: [...relation.parentForeignKey.columns],
+        can_create: false,
+      },
+    }
+    expect(canAddManyToManyRelation(restricted, true)).toBe(false)
+    expect(canRemoveManyToManyRelation(restricted, true)).toBe(true)
+    restricted.junctionResource.creatable_fields = [
+      ...relation.parentForeignKey.columns,
+      ...relation.targetForeignKey.columns,
+    ]
+    restricted.junctionResource.can_create = true
+    expect(canAddManyToManyRelation(restricted, true)).toBe(true)
+  })
 })

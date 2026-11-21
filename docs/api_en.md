@@ -96,6 +96,28 @@ Permissions use `{"schema":"public","resource":"books","operations":["read","upd
 
 Role and assignment changes apply to subsequent requests without a backend restart, and multiple roles are unioned. Validation failures use HTTP 400 `INVALID_ADMIN_REQUEST` and optional `field_errors`. Conflicts include `ALREADY_EXISTS`, `LAST_ACTIVE_ADMIN`, `SELF_DISABLE_FORBIDDEN`, `SELF_ADMIN_REMOVAL_FORBIDDEN` and `SYSTEM_ROLE_IMMUTABLE`; missing entities return `USER_NOT_FOUND` or `ROLE_NOT_FOUND`.
 
+### Field permissions in role configuration
+
+A concrete schema/resource permission can additionally contain `field_permissions` for `create` and `update`:
+
+```json
+{
+  "schema": "public",
+  "resource": "books",
+  "operations": ["read", "create", "update"],
+  "field_permissions": [
+    {"action": "create", "mode": "unrestricted", "columns": []},
+    {"action": "update", "mode": "allowlist", "columns": ["title", "published_on"]}
+  ]
+}
+```
+
+`unrestricted` allows every field otherwise available to the action through metadata. `allowlist` allows only the explicit `columns` array; `"columns":[]` is a distinct state where no field is writable. Missing field configuration in a legacy payload means `unrestricted`; the migration also backfills existing concrete create/update grants as unrestricted, preserving existing role capabilities. Admin/effective permission responses include explicit configuration for concrete create/update grants.
+
+Roles are unioned per resource/action: one unrestricted grant makes effective access unrestricted; otherwise effective fields are the union of allowlists. An empty allowlist adds no fields and does not revoke other roles. Wildcard `*.*` is always unrestricted, rejects `field_permissions`, and cannot be narrowed by another role. System `admin` is unrestricted, `viewer` receives no create/update, and system roles are immutable.
+
+The API validates role existence, create/update actions, concrete schema/resource, mode, allowlist structure and size (at most 1000 columns), duplicates, and column names against fresh target metadata. Generated, identity, read-only and PK columns cannot be selected as writable. Changes are stored only in admin database `role_field_permissions` in the same transaction as resource-permission replacement. No target DDL/GRANT is executed; admin session and CSRF remain mandatory.
+
 ## GET /api/schema
 
 Returns only tables and views for which the current user has `read`. Inaccessible resources, schemas left empty by filtering and foreign keys referencing inaccessible resources are omitted. PostgreSQL system schemas are also excluded. Without any `read` grant, the endpoint returns HTTP 403 `FORBIDDEN` before introspection.
@@ -126,6 +148,10 @@ Successful response (HTTP 200):
             }
           ],
           "primary_key": ["id"],
+          "creatable_fields": ["title", "owner_id"],
+          "updatable_fields": ["title"],
+          "can_create": true,
+          "can_update": true,
           "foreign_keys": [
             {
               "name": "items_owner_id_fkey",
@@ -144,9 +170,13 @@ Successful response (HTTP 200):
 
 `kind` is `table` or `view`. `default` is `null` when no default exists. `primary_key` marks a key column. `identity` is an empty string, `always` or `by_default`; `generated` marks generated columns. `editable` is true only for supported, non-generated table columns (an `always` identity is not editable). `enum_values` contains allowed labels for enum types and is empty otherwise. Composite primary and foreign keys preserve column order. Empty collections are returned as arrays.
 
+`creatable_fields` and `updatable_fields` are effective field permissions computed by the backend from fresh metadata and the role union; the frontend does not compute that union. The array is empty without the corresponding action permission. Unrestricted includes every field otherwise available to the action (update excludes PKs); an allowlist is intersected with that base set. An empty allowlist returns an empty array and is never represented as unrestricted.
+
+`can_create`/`can_update` include the configured mutation pool, action permission and structural write capability. `create_disabled_reason="required_field_unavailable"` means a NOT NULL field without a default/generated/identity value is unavailable and create is impossible. `update_disabled_reason="no_writable_fields"` means the effective update set is empty. With an empty create allowlist, create remains possible when PostgreSQL can create the record solely from default/generated/identity/NULL values. These flags do not change column, resource, history or related-label read visibility.
+
 Every resource also contains `reverse_relations`, one-to-many metadata derived from the same introspected FKs without adding objects to the target schema. Each entry contains the constraint `name`, child `schema`/`resource`, child local `columns` and parent `referenced_columns` in matching order. For example, an `authors` relation is `{"name":"books_author_id_fkey","schema":"public","resource":"books","columns":["author_id"],"referenced_columns":["id"]}`. Reverse relations are built only after RBAC filtering: resources without `read`, their FKs and inaccessible child resource names are omitted and never disclosed.
 
-`write_enabled` is true only when the optional target write pool is configured and the current user has at least one `create`, `update` or `delete` grant. It does not guarantee that every resource or column is writable; frontend controls additionally use effective permissions.
+`write_enabled` is true only when the mutation pool built from the single `TARGET_DATABASE_URL` is configured and at least one visible resource has actually available create/update or a structurally supported delete. It guarantees neither writes to every resource or column nor PostgreSQL privileges. The read pool remains read-only; there is no separate writer DSN.
 
 If no target database is configured, the endpoint returns HTTP 503:
 
@@ -295,7 +325,7 @@ Each relation uses one parameterized SELECT through the read-only target pool, r
 
 ## Many-to-one selectors in record forms
 
-The frontend uses the existing `foreign_keys` from `/api/schema` without per-resource configuration. For each many-to-one FK it uses the ordered `columns`, `referenced_schema`, `referenced_table`, `referenced_columns`, plus the local columns' `nullable` and `editable` flags. A simple FK becomes one selector; every part of a composite FK is grouped into one logical selector. Non-editable columns and primary keys during update retain their read-only/raw controls.
+The frontend uses the existing `foreign_keys` from `/api/schema` without per-resource configuration. For each many-to-one FK it uses the ordered `columns`, `referenced_schema`, `referenced_table`, `referenced_columns`, plus local `nullable`, `editable` and effective `creatable_fields`/`updatable_fields`. A simple FK becomes one selector; every part of a composite FK is grouped into one logical selector. Non-editable columns and primary keys during update retain their read-only/raw controls. When a field permission makes an FK unavailable for the current action, its selector and unauthorized editable controls are hidden and stale values are omitted from the payload; read-only relation panels and labels are unchanged.
 
 The selector requests only the first page through the existing records list endpoint (`limit=20`), performs server-side search with a 300 ms debounce, and appends subsequent pages with **Load more**. It never loads the whole referenced table. During editing, the current value is fetched separately using exact `eq` filters for every referenced column with `limit=1`, so it is displayed even when absent from the first page. Its technical key is preserved rather than replaced with an empty value while the label loads or if that request fails.
 
@@ -319,7 +349,7 @@ The frontend detects many-to-many relations generically from RBAC-filtered `/api
 
 The panel requires `read` on parent, target and junction. Inaccessible resources are not disclosed and no related requests are sent. It loads a junction page through `GET /api/resources/{schema}/{junction}/records` with typed `eq` filters on every parent FK column and resolves target labels in one batch `POST /api/resources/{schema}/{junction}/relations/resolve` per page, never per row. Simple/composite parent, target and junction keys, exact bigint/numeric strings, UUIDs and independent pagination are supported. A supported junction reverse panel is not duplicated alongside its many-to-many panel.
 
-**Add relation** additionally requires a configured writer, `create` on junction and `read` on target for the selector. It uses ordinary `POST /api/resources/{schema}/{junction}/records` with flat `values` containing only the two FKs' columns; parent/target records are not changed. The selector uses the existing records list with server-side search, debounce and Load more, and cannot create target records. `UNIQUE_VIOLATION` means a duplicate relation; a failed POST creates no audit event and is not automatically retried.
+**Add relation** additionally requires a configured writer, `create` on junction, every required junction FK column in effective `creatable_fields`, and `read` on target for the selector. With an empty allowlist or any missing FK column, Add relation is hidden; read-only relations and independent delete behavior are unchanged. It uses ordinary `POST /api/resources/{schema}/{junction}/records` with flat `values` containing only the two FKs' columns; parent/target records are not changed. The selector uses the existing records list with server-side search, debounce and Load more, and cannot create target records. `UNIQUE_VIOLATION` means a duplicate relation; a failed POST creates no audit event and is not automatically retried.
 
 **Remove relation** additionally requires a configured writer and the independent `delete` grant on junction. It uses the existing `DELETE /api/resources/{schema}/{junction}/records/{key}` with the URL-encoded full composite junction PK. Its confirmation explicitly differs from Delete record: only the junction record is deleted, while parent and target records are neither deleted nor updated. The list refreshes after 204 or committed audit failure without automatic retry; removing the last relation on a page navigates to the previous page.
 
@@ -346,6 +376,8 @@ Request body:
 
 Only fields present in `values` are inserted. Omitted generated columns, identity columns and columns with defaults are left to PostgreSQL. A client can use `DEFAULT VALUES` behavior by sending an empty `values` object when all required fields have defaults or are nullable. JSON `null` means SQL `NULL` and is rejected for non-nullable columns. Text empty strings remain empty strings; they are not converted to `NULL`.
 
+After the resource-level `create` check, the backend validates every supplied field against effective `creatable_fields`, independently of the frontend. A field outside the effective set returns HTTP 403 `FIELD_FORBIDDEN`; a mixed payload is rejected as a whole with no INSERT or audit. If a required NOT NULL field without a default/generated/identity value is unavailable, a structured HTTP 403 `CREATE_IMPOSSIBLE` is returned before the inevitable database error, without SQL or stack traces. Defaults/generated/identity behavior is unchanged.
+
 `bigint`, `numeric` and `decimal` values should be JSON strings to preserve precision. Integer values may be JSON numbers or strings. Dates, timestamps and UUIDs use the same formats as record filters. JSON and JSONB accept any valid JSON value. Enum values must match `enum_values`. Unsupported PostgreSQL types, generated columns and `always` identity columns cannot be supplied.
 
 Successful response is HTTP 201. PostgreSQL `RETURNING` provides the complete saved record using the same safe JSON representation as the list endpoint:
@@ -362,6 +394,8 @@ Successful response is HTTP 201. PostgreSQL `RETURNING` provides the complete sa
 ## PATCH /api/resources/{schema}/{resource}/records/{key}
 
 Updates only the supplied editable, non-primary-key fields and returns the complete updated record with HTTP 200. It requires `update` and a valid CSRF token; without the permission it returns HTTP 403 `FORBIDDEN`. Views and tables without a primary key are read-only for updates. Primary-key updates are not supported.
+
+Every supplied field must be in effective `updatable_fields`. A forbidden field returns HTTP 403 `FIELD_FORBIDDEN` and rejects the entire PATCH: even allowed fields from a mixed request are unchanged, with no UPDATE or audit. An empty effective set returns `NO_WRITABLE_FIELDS`. PK/generated/read-only/unknown columns retain their existing metadata validation and cannot bypass it through field permissions.
 
 `{key}` is a **URL-encoded JSON object** containing exactly the resource's primary-key columns. Object order is not significant. Values use the request JSON representation, including strings for bigint and numeric keys. Examples before URL encoding:
 
@@ -402,7 +436,7 @@ The error envelope is shared with read endpoints. Validation and some constraint
 ```
 
 - HTTP 400: `INVALID_RECORD`, `INVALID_RECORD_KEY`, `NOT_NULL_VIOLATION`, `FOREIGN_KEY_VIOLATION` or `CHECK_VIOLATION`.
-- HTTP 403: `FORBIDDEN` when the required permission is missing; `CSRF_TOKEN_INVALID` for a missing or invalid CSRF token. The read pool remains read-only, and database privileges additionally constrain mutations.
+- HTTP 403: `FORBIDDEN` when the required resource permission is missing; `FIELD_FORBIDDEN` for a field outside the effective set; `NO_WRITABLE_FIELDS` for an empty update set; `CREATE_IMPOSSIBLE` when a required field is unavailable for create; `CSRF_TOKEN_INVALID` for a missing or invalid CSRF token. Field-forbidden requests create neither a mutation nor audit. The read pool remains read-only, and database privileges additionally constrain mutations.
 - HTTP 404: `RESOURCE_NOT_FOUND` or `RECORD_NOT_FOUND`.
 - HTTP 409: `RESOURCE_READ_ONLY` or `UNIQUE_VIOLATION`.
 - HTTP 503: `TARGET_NOT_CONFIGURED`.
@@ -444,7 +478,7 @@ A check constraint requires after for create, before/after for update and only b
 
 Fields whose names indicate passwords, session/CSRF tokens, password hashes, secrets or connection strings are omitted from audit, including nested JSON objects. Errors are logged by type only, without connection strings, record values or secrets. Bigint/numeric use the records API strings, bytea uses Base64, and JSON/JSONB is handled as `json.RawMessage`/`json.Number` rather than passing through JavaScript numbers.
 
-History covers only successful changes made through Velmir after this feature was introduced. It **does not guarantee audit of external changes** made directly in the target database. Login/logout, reads and user administration are not audited. Create on a table without a primary key can store an event with an empty key, but record-specific history is unavailable.
+History covers only successful changes made through Velmir after this feature was introduced. It **does not guarantee audit of external changes** made directly in the target database. Login/logout, reads and user administration are not audited. Field-forbidden mutations are not audited; successful create/update events retain their actor, record key and before/after data, and `AUDIT_WRITE_FAILED` retains `mutation_committed=true` without automatic retry. No field-level read filtering is added: history uses resource-level `read`. Create on a table without a primary key can store an event with an empty key, but record-specific history is unavailable.
 
 ## GET /api/resources/{schema}/{resource}/records/{key}/history
 

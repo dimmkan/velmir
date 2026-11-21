@@ -20,6 +20,7 @@ func (fn recordListerFunc) List(ctx context.Context, schema string, resource int
 }
 
 func recordsCatalog() introspection.Catalog {
+	idDefault := "nextval('items_id_seq'::regclass)"
 	return introspection.Catalog{Schemas: []introspection.Schema{{
 		Name: "public",
 		Resources: []introspection.Resource{{
@@ -27,8 +28,8 @@ func recordsCatalog() introspection.Catalog {
 			Kind:       "table",
 			PrimaryKey: []string{"id"},
 			Columns: []introspection.Column{
-				{Name: "id", DataType: "bigint"},
-				{Name: "name", DataType: "text"},
+				{Name: "id", DataType: "bigint", PrimaryKey: true, Default: &idDefault},
+				{Name: "name", DataType: "text", Editable: true},
 			},
 			ForeignKeys: []introspection.ForeignKey{},
 		}},

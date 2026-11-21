@@ -322,7 +322,12 @@ onBeforeUnmount(() => window.removeEventListener('popstate', handlePopState))
       </aside>
 
       <main class="content">
-        <AdministrationPage v-if="applicationSection === 'administration' && authState.can_admin" :backend-base-u-r-l="backendBaseURL" />
+        <AdministrationPage
+          v-if="applicationSection === 'administration' && authState.can_admin"
+          :backend-base-u-r-l="backendBaseURL"
+          :schemas="catalog?.schemas ?? []"
+          @permissions-saved="loadSchema"
+        />
         <template v-else-if="selectedResource">
           <header class="resource-header">
             <p class="eyebrow">{{ selectedSchemaName }}</p>

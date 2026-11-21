@@ -252,7 +252,7 @@ npm run dev
 
 Open the Vite URL (normally `http://localhost:5173`). Vite proxies `/api`, `/healthz`, and `/readyz`; cookies remain same-origin. The production Go server serves `dist`, hashed assets with long-term caching, and `index.html` with `no-cache`; `/api/*` never reaches SPA fallback.
 
-**H2 hardening:** optional Caddy HTTPS, explicit trusted proxy configuration, CSP/HSTS, Docker secrets, session maintenance, and admin backup/restore are included. There are no automatic target GRANT/DDL statements; field-level permissions are not implemented and remain the next functional stage.
+**H2 hardening:** optional Caddy HTTPS, explicit trusted proxy configuration, CSP/HSTS, Docker secrets, session maintenance, and admin backup/restore are included. There are no automatic target GRANT/DDL statements. Stage 8A adds field-level permissions for create/update only; field-level read filtering is not implemented.
 
 ## Interface design and language
 
@@ -275,6 +275,14 @@ The bootstrap administrator receives `admin` automatically. A new user receives 
 
 Administrators have a separate **Administration** section for creating users, changing display names, enabling/disabling accounts, resetting passwords and assigning roles, plus creating and editing custom roles and permissions. The section is hidden from viewers and users without roles, while the backend independently checks the `admin` system role, session and CSRF. Disabling an account and resetting a password revoke all user sessions. Self-disable, removing your own `admin` role and removing admin rights from the last active administrator are forbidden. System roles are immutable; wildcard `*.*` and concrete schema/resource grants support `read`, `create`, `update` and `delete`. A custom role receives `delete` only after an explicit assignment in PermissionEditor; the migration does not grant it to existing custom roles. Changes apply to subsequent requests without a restart. See `docs/api_en.md` for complete API contracts.
 
+### Field permissions for create/update
+
+For custom roles with concrete schema/resource grants, PermissionEditor supports independent field settings for `create` and `update`: **All available fields** (`unrestricted`) or **Selected fields** (`allowlist`). An empty allowlist is a distinct explicit **No available fields** state, not unrestricted. Generated, identity, PK and read-only columns cannot be added to an allowlist. Wildcard `*.*` is always unrestricted and offers no field restrictions. System roles remain immutable: `admin` is unrestricted and `viewer` has no create/update.
+
+The admin database migration preserves existing role capabilities as unrestricted, and legacy API payloads without field configuration also mean unrestricted. When roles are unioned, one unrestricted grant for a resource/action makes effective access unrestricted; otherwise allowlists are unioned. An empty allowlist adds no fields and does not revoke other roles' grants. Changes apply to subsequent requests without a restart.
+
+`/api/schema` returns backend-computed `creatable_fields`, `updatable_fields`, `can_create`, `can_update` and field-related disabled reasons. The frontend uses them for controls, payloads, FK selectors and junction creation, while the backend independently rejects forbidden and mixed POST/PATCH requests before mutation and audit. If a required NOT NULL field without a default/generated value is unavailable, create is not offered and returns a safe structured 403. There is no field-level read filtering: list, history and related-label read visibility is unchanged.
+
 The `cmd/users` CLI remains available for local administration and access recovery. After applying migrations, run these commands from the `backend` directory:
 
 ```powershell
@@ -292,10 +300,10 @@ For a local viewer check, these two commands create the account and assign `view
 
 ## Databases and write safety
 
-- **Admin database** (`velmir_admin`) belongs to Velmir. The separate migrate CLI applies Goose migrations only here and creates `users`, `sessions`, `roles`, `user_roles`, `role_permissions`, and `audit_events`.
+- **Admin database** (`velmir_admin`) belongs to Velmir. The separate migrate CLI applies Goose migrations only here and creates `users`, `sessions`, `roles`, `user_roles`, `role_permissions`, `role_field_permissions`, and `audit_events`.
 - **Demo target database** (`velmir_demo`) is a separate PostgreSQL created only by the demo override. Existing initialization fixtures create demo tables, records, a view, PK/FK, and local roles; no later automatic GRANT runs.
-- `TARGET_DATABASE_URL` is the single optional DSN. It creates two pools: the read pool always sets `default_transaction_read_only=on`, while the mutation pool is used only for supported INSERT/UPDATE/DELETE after RBAC/CSRF checks.
-- `write_enabled` depends on target configuration and effective Velmir permissions. Actual mutation capability is also constrained by PostgreSQL role privileges; viewer remains read-only through Velmir authorization even with a fully privileged DSN.
+- `TARGET_DATABASE_URL` is the single optional DSN. It creates two pools: the read pool always sets `default_transaction_read_only=on`, while the mutation pool is used only for supported INSERT/UPDATE/DELETE after resource/field RBAC and CSRF checks. No separate writer DSN exists.
+- `write_enabled` depends on target configuration, action permissions and actual write capability using effective fields. Actual mutation capability is also constrained by PostgreSQL role privileges; viewer remains read-only through Velmir authorization even with a fully privileged DSN.
 - Velmir never runs migrations, automatic GRANT, DDL, or arbitrary SQL against a target database. Never point integration tests or a target URL at a real database for local demo setup.
 
 For full CRUD, the target database owner grants the application role only the required privileges in advance: `CONNECT` on the database, `USAGE` on used schemas, `SELECT` for reads, `INSERT`, `UPDATE`, `DELETE` on allowed tables, and `USAGE`, `SELECT`, `UPDATE` on sequences required for default/identity values. A read-only role needs only `CONNECT`, schema `USAGE`, and `SELECT`. The application needs no `CREATE`, `ALTER`, `DROP`, or `TRUNCATE`. Velmir never grants privileges itself.
@@ -305,6 +313,8 @@ Without `TARGET_DATABASE_URL`, the backend starts, readiness reports `not_config
 ## Creating, editing and deleting records
 
 The frontend builds all forms from `/api/schema`; there are no table-specific forms. Supported inputs cover text, boolean, integer, bigint/numeric, date, timestamps, UUID, enums and JSON. Nullable fields have an explicit NULL control, and create forms can explicitly use a database default. Generated and `always` identity fields are not required or editable.
+
+Create/update forms use only effective `creatable_fields`/`updatable_fields`: unauthorized controls are hidden, their stale values are omitted from payloads, and required validation applies only to accessible fields. An empty update set disables editing without changing read-only details. An unavailable FK hides its many-to-one selector. Switching ru/en preserves form values.
 
 Updates and deletes require a primary key, including composite keys, and updates cannot change primary-key fields. Tables without a primary key allow creation but not updates or deletes. Views are read-only. Unsupported PostgreSQL types are displayed but not edited automatically. PostgreSQL not-null, unique, foreign-key and check violations are shown as API/form errors.
 
@@ -328,7 +338,7 @@ Backend and frontend independently enforce permissions: read only on the parent 
 
 Parent forms/details generically show target records through a supported PostgreSQL junction table. Detection uses only RBAC-filtered `/api/schema`: exactly two many-to-one FKs to distinct resources and a composite PK consisting exactly of both FKs' columns are required; additional fields must be nullable or have default/generated/identity values. Self-referential relations, surrogate PKs, three or more FKs and required additional junction attributes without default/generated values are unsupported and remain ordinary resources/reverse panels.
 
-The panel requires `read` on parent, target and junction. It loads records through the existing records list with typed parent filters and pagination, and labels through one batch relations/resolve per page. **Add relation** requires a writer, `create` on junction and `read` on target, and uses a server-side-search selector plus ordinary flat junction POST. **Remove relation** requires a writer and `delete` on junction, and uses DELETE with the full composite junction PK. Its confirmation explicitly states that only the junction record is deleted while parent/target records remain unchanged; it is distinct from ordinary **Delete record**. Parent/target `update` grants are not required.
+The panel requires `read` on parent, target and junction. It loads records through the existing records list with typed parent filters and pagination, and labels through one batch relations/resolve per page. **Add relation** requires a writer, `create` on junction, every required junction FK column in `creatable_fields`, and `read` on target; it uses a server-side-search selector plus ordinary flat junction POST. **Remove relation** requires a writer and `delete` on junction, and uses DELETE with the full composite junction PK. Its confirmation explicitly states that only the junction record is deleted while parent/target records remain unchanged; it is distinct from ordinary **Delete record**. Parent/target `update` grants are not required.
 
 Creating and removing a relation produces ordinary audit `create`/`delete` events only for the junction resource. Duplicate/failed mutations are not audited. After committed `AUDIT_WRITE_FAILED`, the relation mutation is never automatically retried and the list refreshes with a separate warning. The editor does not support nested mutations, related-record creation or editing additional junction attributes. See `docs/api_en.md` for details and the complete permission matrix.
 

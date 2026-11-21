@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -248,7 +249,6 @@ func (s *Administration) ListRoles(ctx context.Context) ([]Role, error) {
 	grants := make(map[int64][]authorization.Grant)
 	for rows.Next() {
 		var role Role
-		var grant authorization.Grant
 		var schemaName, resourceName *string
 		var operation *authorization.Operation
 		if err := rows.Scan(&role.ID, &role.Name, &role.Description, &role.IsSystem, &schemaName, &resourceName, &operation); err != nil {
@@ -261,20 +261,41 @@ func (s *Administration) ListRoles(ctx context.Context) ([]Role, error) {
 			roles = append(roles, role)
 		}
 		if schemaName != nil {
-			grant = authorization.Grant{Schema: *schemaName, Resource: *resourceName, Operation: *operation}
+			grant := authorization.Grant{RoleID: role.ID, Schema: *schemaName, Resource: *resourceName, Operation: *operation}
 			grants[role.ID] = append(grants[role.ID], grant)
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate roles: %w", err)
 	}
+	rows.Close()
+	fieldRows, err := tx.Query(ctx, `
+		SELECT role_id, schema_name, resource_name, action, mode, columns
+		FROM role_field_permissions
+		ORDER BY role_id, schema_name, resource_name, action`)
+	if err != nil {
+		return nil, fmt.Errorf("list role field permissions: %w", err)
+	}
+	defer fieldRows.Close()
+	fieldGrants := make(map[int64][]authorization.FieldGrant)
+	for fieldRows.Next() {
+		var grant authorization.FieldGrant
+		if err := fieldRows.Scan(&grant.RoleID, &grant.Schema, &grant.Resource, &grant.Action, &grant.Mode, &grant.Columns); err != nil {
+			return nil, fmt.Errorf("read role field permission: %w", err)
+		}
+		fieldGrants[grant.RoleID] = append(fieldGrants[grant.RoleID], grant)
+	}
+	if err := fieldRows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate role field permissions: %w", err)
+	}
 	for index := range roles {
-		roles[index].Permissions = authorization.EffectivePermissions(grants[roles[index].ID])
+		roles[index].Permissions = authorization.EffectivePermissionsWithFields(grants[roles[index].ID], fieldGrants[roles[index].ID])
 	}
 	return roles, tx.Commit(ctx)
 }
 
 func (s *Administration) CreateRole(ctx context.Context, name, description string, permissions authorization.Permissions) (Role, error) {
+	permissions = authorization.NormalizePermissions(permissions)
 	name, description, err := validateRole(name, description, permissions)
 	if err != nil {
 		return Role{}, err
@@ -329,6 +350,7 @@ func (s *Administration) UpdateRole(ctx context.Context, roleID int64, name, des
 }
 
 func (s *Administration) ReplaceRolePermissions(ctx context.Context, roleID int64, permissions authorization.Permissions) error {
+	permissions = authorization.NormalizePermissions(permissions)
 	if err := authorization.ValidatePermissions(permissions); err != nil {
 		return &AdminValidationError{Field: "permissions", Message: err.Error()}
 	}
@@ -369,6 +391,19 @@ func replacePermissions(ctx context.Context, tx pgx.Tx, roleID int64, permission
 		for _, operation := range permission.Operations {
 			if _, err := tx.Exec(ctx, "INSERT INTO role_permissions (role_id, schema_name, resource_name, permission) VALUES ($1, $2, $3, $4)", roleID, permission.Schema, permission.Resource, operation); err != nil {
 				return fmt.Errorf("save role permission: %w", err)
+			}
+		}
+		for _, fieldPermission := range permission.FieldPermissions {
+			columns, err := json.Marshal(fieldPermission.Columns)
+			if err != nil {
+				return fmt.Errorf("encode role field permission: %w", err)
+			}
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO role_field_permissions (role_id, schema_name, resource_name, action, mode, columns)
+				VALUES ($1, $2, $3, $4, $5, $6::jsonb)`,
+				roleID, permission.Schema, permission.Resource, fieldPermission.Action, fieldPermission.Mode, columns,
+			); err != nil {
+				return fmt.Errorf("save role field permission: %w", err)
 			}
 		}
 	}

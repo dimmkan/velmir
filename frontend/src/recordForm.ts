@@ -14,12 +14,20 @@ export type RecordFormState = Record<string, FormFieldState>
 export type FormErrors = Record<string, string>
 
 export function canCreateRecord(writeEnabled: boolean, resource: ResourceMetadata, permissionAllowed: boolean): boolean {
-  return permissionAllowed && writeEnabled && resource.kind === 'table'
+  return permissionAllowed && writeEnabled && resource.kind === 'table' && resource.can_create !== false
 }
 
 export function canUpdateRecord(writeEnabled: boolean, resource: ResourceMetadata, permissionAllowed: boolean): boolean {
-  return canCreateRecord(writeEnabled, resource, permissionAllowed) && resource.primary_key.length > 0 &&
-    resource.columns.some((column) => column.editable && !column.primary_key)
+  const structurallyUpdatable = resource.primary_key.length > 0 && resource.columns.some((column) => column.editable && !column.primary_key)
+  return permissionAllowed && writeEnabled && resource.kind === 'table' && structurallyUpdatable && resource.can_update !== false
+}
+
+export function writableFieldNames(mode: FormMode, resource: ResourceMetadata): Set<string> {
+  const fields = mode === 'create' ? resource.creatable_fields : resource.updatable_fields
+  if (fields) return new Set(fields)
+  return new Set(resource.columns.filter((column) =>
+    column.editable && !(mode === 'edit' && column.primary_key),
+  ).map((column) => column.name))
 }
 
 export function initialFormState(mode: FormMode, resource: ResourceMetadata, record?: RecordRow): RecordFormState {
@@ -38,9 +46,10 @@ export function initialFormState(mode: FormMode, resource: ResourceMetadata, rec
 
 export function buildCreatePayload(resource: ResourceMetadata, state: RecordFormState): RecordValues {
   const values: RecordValues = {}
+  const allowed = writableFieldNames('create', resource)
   for (const column of resource.columns) {
     const field = state[column.name]
-    if (!column.editable || field.useDefault) continue
+    if (!allowed.has(column.name) || !column.editable || !field || field.useDefault) continue
     values[column.name] = fieldValue(column, field)
   }
   return values
@@ -52,9 +61,10 @@ export function buildUpdatePayload(
   initial: RecordFormState,
 ): RecordValues {
   const values: RecordValues = {}
+  const allowed = writableFieldNames('edit', resource)
   for (const column of resource.columns) {
     const field = state[column.name]
-    if (!column.editable || column.primary_key || fieldsEqual(field, initial[column.name])) continue
+    if (!allowed.has(column.name) || !column.editable || column.primary_key || !field || !initial[column.name] || fieldsEqual(field, initial[column.name])) continue
     values[column.name] = fieldValue(column, field)
   }
   return values
@@ -66,8 +76,9 @@ export function validateRecordForm(
   state: RecordFormState,
 ): FormErrors {
   const errors: FormErrors = {}
+  const allowed = writableFieldNames(mode, resource)
   for (const column of resource.columns) {
-    if (!column.editable || (mode === 'edit' && column.primary_key)) continue
+    if (!allowed.has(column.name) || !column.editable || (mode === 'edit' && column.primary_key)) continue
     const field = state[column.name]
     if (!field) {
       if (!column.nullable) errors[column.name] = 'validation.required'
@@ -90,7 +101,7 @@ export function validateRecordForm(
   for (const foreignKey of resource.foreign_keys) {
     if (foreignKey.columns.length === 0 || foreignKey.columns.length !== foreignKey.referenced_columns.length) continue
     const columns = foreignKey.columns.map((name) => resource.columns.find((column) => column.name === name))
-    if (columns.some((column) => !column)) continue
+    if (columns.some((column) => !column) || foreignKey.columns.some((name) => !allowed.has(name))) continue
     const fields = foreignKey.columns.map((name) => state[name])
     if (fields.some((field) => !field)) continue
 

@@ -146,7 +146,10 @@ export function manyToManyCreateValues(
 }
 
 export function canAddManyToManyRelation(relation: ManyToManyRelation, writeEnabled: boolean): boolean {
-  return writeEnabled &&
+  const creatableFields = new Set(relation.junctionResource.creatable_fields ?? relation.junctionResource.columns.filter((column) => column.editable).map((column) => column.name))
+  const requiredColumns = [...relation.parentForeignKey.columns, ...relation.targetForeignKey.columns]
+  return writeEnabled && relation.junctionResource.can_create !== false &&
+    requiredColumns.every((column) => creatableFields.has(column)) &&
     can(relation.junctionSchema, relation.junctionResource.name, 'create') &&
     can(relation.targetForeignKey.referenced_schema, relation.targetForeignKey.referenced_table, 'read')
 }

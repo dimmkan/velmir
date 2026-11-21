@@ -96,6 +96,28 @@
 
 Изменения ролей и назначений применяются к следующим запросам без перезапуска backend. Права нескольких ролей объединяются. Ошибки валидации используют HTTP 400 `INVALID_ADMIN_REQUEST` и при необходимости `field_errors`. Конфликты включают `ALREADY_EXISTS`, `LAST_ACTIVE_ADMIN`, `SELF_DISABLE_FORBIDDEN`, `SELF_ADMIN_REMOVAL_FORBIDDEN` и `SYSTEM_ROLE_IMMUTABLE`; отсутствующие сущности возвращают `USER_NOT_FOUND` или `ROLE_NOT_FOUND`.
 
+### Field permissions в конфигурации роли
+
+Для concrete schema/resource permission может дополнительно содержать `field_permissions` для `create` и `update`:
+
+```json
+{
+  "schema": "public",
+  "resource": "books",
+  "operations": ["read", "create", "update"],
+  "field_permissions": [
+    {"action": "create", "mode": "unrestricted", "columns": []},
+    {"action": "update", "mode": "allowlist", "columns": ["title", "published_on"]}
+  ]
+}
+```
+
+`unrestricted` разрешает все поля, которые иначе доступны действию по metadata. `allowlist` разрешает только явный массив `columns`; `"columns":[]` — самостоятельный режим, при котором ни одно поле не доступно для записи. Отсутствие field configuration в legacy payload означает `unrestricted`; миграция также backfill-ит существующие concrete create/update grants как unrestricted, поэтому прежние возможности ролей сохраняются. В ответах admin/effective permissions concrete create/update grants содержат явную конфигурацию.
+
+Права ролей объединяются по resource/action: один unrestricted даёт effective unrestricted, иначе effective fields — объединение allowlists. Empty allowlist добавляет ноль полей и не отменяет другие роли. Wildcard `*.*` всегда unrestricted, не принимает `field_permissions` и не может быть сужен другой ролью. Системная `admin` unrestricted, `viewer` не получает create/update, системные роли неизменяемы.
+
+API проверяет существование роли, действия create/update, concrete schema/resource, mode, размер и структуру allowlist (до 1000 колонок), duplicates и имена колонок по свежим target metadata. Generated, identity, read-only и PK columns нельзя выбрать как writable. Изменения сохраняются только в admin database `role_field_permissions` в той же транзакции, что и замена resource permissions. DDL/GRANT в target не выполняются; admin session и CSRF обязательны как и прежде.
+
 ## GET /api/schema
 
 Возвращает только таблицы и представления, для которых текущий пользователь имеет `read`. Недоступные ресурсы, пустые после фильтрации схемы и внешние ключи на недоступные ресурсы не включаются в ответ. Системные схемы PostgreSQL также исключаются. Без какого-либо права `read` endpoint возвращает HTTP 403 `FORBIDDEN` до introspection.
@@ -126,6 +148,10 @@
             }
           ],
           "primary_key": ["id"],
+          "creatable_fields": ["title", "owner_id"],
+          "updatable_fields": ["title"],
+          "can_create": true,
+          "can_update": true,
           "foreign_keys": [
             {
               "name": "items_owner_id_fkey",
@@ -144,9 +170,13 @@
 
 `kind` принимает значение `table` или `view`. `default` равен `null`, если значение по умолчанию отсутствует. `primary_key` отмечает ключевой столбец. `identity` — пустая строка, `always` или `by_default`; `generated` отмечает сгенерированные столбцы. `editable` истинен только для поддерживаемых несгенерированных столбцов таблицы (`always` identity не редактируется). `enum_values` содержит допустимые метки enum-типов и пуст в остальных случаях. Составные первичные и внешние ключи сохраняют порядок столбцов. Пустые коллекции возвращаются как массивы.
 
+`creatable_fields` и `updatable_fields` — effective field permissions, вычисленные backend из свежих metadata и объединения ролей; frontend не выполняет union самостоятельно. Без соответствующего action permission массив пуст. Unrestricted включает все поля, иначе допустимые действию (для update PK исключаются); allowlist пересекается с этим базовым набором. Empty allowlist возвращает пустой массив и никогда не отображается как unrestricted.
+
+`can_create`/`can_update` учитывают configured mutation pool, action permission и структурную возможность записи. `create_disabled_reason="required_field_unavailable"` означает, что NOT NULL поле без default/generated/identity недоступно и create невозможен. `update_disabled_reason="no_writable_fields"` означает пустой effective update set. При empty create allowlist create всё ещё возможен, если PostgreSQL может создать запись только из default/generated/identity/NULL values. Эти flags не меняют read visibility колонок, resources, history или related labels.
+
 Каждый resource также содержит `reverse_relations` — one-to-many metadata, вычисленную из тех же introspected FK без дополнительных объектов в target schema. Элемент содержит constraint `name`, дочерние `schema`/`resource`, дочерние local `columns` и parent `referenced_columns` в соответствующем порядке. Например, для `authors` связь имеет `{"name":"books_author_id_fkey","schema":"public","resource":"books","columns":["author_id"],"referenced_columns":["id"]}`. Reverse relations создаются только после RBAC-фильтрации: ресурсы без `read`, их FK и имена недоступных child resources не включаются и не раскрываются.
 
-`write_enabled` истинен только когда настроен необязательный write pool и текущий пользователь имеет хотя бы одно право `create`, `update` или `delete`. Флаг не гарантирует возможность записи в каждый ресурс или столбец; для controls frontend дополнительно использует effective permissions.
+`write_enabled` истинен только когда настроен mutation pool из единого `TARGET_DATABASE_URL` и хотя бы один видимый resource имеет реально доступные create/update либо structurally поддерживаемый delete. Он не гарантирует запись в каждый ресурс или столбец и не заменяет PostgreSQL privileges. Read pool остаётся read-only; отдельного writer DSN нет.
 
 Если target database не настроена, endpoint возвращает HTTP 503:
 
@@ -295,7 +325,7 @@ Read-only batch endpoint для related labels в списке записей. �
 
 ## Many-to-one selectors в формах записей
 
-Frontend использует существующие `foreign_keys` из `/api/schema` без отдельной конфигурации ресурсов. Для каждого many-to-one FK учитываются упорядоченные `columns`, `referenced_schema`, `referenced_table`, `referenced_columns`, а также `nullable` и `editable` локальных столбцов. Simple FK заменяется одним selector; все части composite FK объединяются в один логический selector. Если столбец нельзя редактировать или это PK при update, сохраняется read-only/raw control.
+Frontend использует существующие `foreign_keys` из `/api/schema` без отдельной конфигурации ресурсов. Для каждого many-to-one FK учитываются упорядоченные `columns`, `referenced_schema`, `referenced_table`, `referenced_columns`, `nullable`, `editable` и effective `creatable_fields`/`updatable_fields` локальных столбцов. Simple FK заменяется одним selector; все части composite FK объединяются в один логический selector. Если столбец нельзя редактировать или это PK при update, сохраняется read-only/raw control. Если FK недоступен для текущего действия field permission, selector и unauthorized editable controls скрываются, а старые значения не включаются в payload; read-only relation panels и labels не меняются.
 
 Selector запрашивает только первую страницу через существующий records list endpoint (`limit=20`), выполняет server-side search с debounce 300 ms и добавляет следующие страницы кнопкой **Load more**. Вся referenced table не загружается. При editing текущее значение отдельно запрашивается точными `eq` filters по всем referenced columns с `limit=1`, поэтому оно отображается, даже если отсутствует на первой странице. До загрузки label или при ошибке технический key не заменяется пустым значением.
 
@@ -319,7 +349,7 @@ Frontend generic-образом определяет many-to-many relations то
 
 Для панели необходимы `read` на parent, target и junction. Недоступные ресурсы не раскрываются и related requests не выполняются. Панель запрашивает страницу junction records через `GET /api/resources/{schema}/{junction}/records` с typed `eq` filters по всем parent FK columns и получает target labels одним batch `POST /api/resources/{schema}/{junction}/relations/resolve` на страницу, а не запросом на строку. Поддерживаются simple/composite parent, target и junction keys, точные bigint/numeric строки, UUID и независимая pagination. Поддерживаемая junction reverse panel не дублируется вместе с many-to-many panel.
 
-Для **Add relation** дополнительно нужны настроенный writer, `create` на junction и `read` на target для selector. Используется обычный `POST /api/resources/{schema}/{junction}/records` с flat `values`, содержащими только колонки двух FK; parent/target records не изменяются. Selector использует существующий records list с server-side search, debounce и Load more, без создания target records. `UNIQUE_VIOLATION` означает duplicate relation; failed POST не создаёт audit event и не повторяется автоматически.
+Для **Add relation** дополнительно нужны настроенный writer, `create` на junction, все необходимые junction FK columns в effective `creatable_fields` и `read` на target для selector. При empty allowlist или отсутствии хотя бы одной FK column Add relation скрывается; read-only связи и независимый delete behavior не меняются. Используется обычный `POST /api/resources/{schema}/{junction}/records` с flat `values`, содержащими только колонки двух FK; parent/target records не изменяются. Selector использует существующий records list с server-side search, debounce и Load more, без создания target records. `UNIQUE_VIOLATION` означает duplicate relation; failed POST не создаёт audit event и не повторяется автоматически.
 
 Для **Remove relation** дополнительно нужны настроенный writer и отдельное `delete` на junction. Используется существующий `DELETE /api/resources/{schema}/{junction}/records/{key}` с URL-кодированным полным composite junction PK. Confirmation удаляет только junction record и явно отличается от Delete record: parent и target records не удаляются и не обновляются. После 204 или committed audit failure список обновляется без automatic retry; при удалении последней связи страницы выполняется переход назад.
 
@@ -346,6 +376,8 @@ Create/delete связей аудируются как обычные `create`/`
 
 Вставляются только поля, присутствующие в `values`. Пропущенные generated- и identity-столбцы, а также столбцы со значениями по умолчанию остаются на усмотрение PostgreSQL. Клиент может получить поведение `DEFAULT VALUES`, отправив пустой объект `values`, если все обязательные поля имеют значения по умолчанию или допускают NULL. JSON `null` означает SQL `NULL` и отклоняется для non-nullable столбцов. Пустые текстовые строки остаются пустыми строками и не преобразуются в `NULL`.
 
+После resource-level `create` check backend проверяет каждое переданное поле по effective `creatable_fields`, независимо от frontend. Поле вне effective set возвращает HTTP 403 `FIELD_FORBIDDEN`; смешанный payload отклоняется целиком, INSERT и audit не выполняются. Если обязательное NOT NULL поле без default/generated/identity недоступно, возвращается structured HTTP 403 `CREATE_IMPOSSIBLE` до неизбежной database error, без SQL/stack traces. Defaults/generated/identity сохраняют прежнее поведение.
+
 Значения `bigint`, `numeric` и `decimal` следует передавать как JSON-строки для сохранения точности. Целые значения могут быть JSON numbers или strings. Даты, timestamps и UUID используют те же форматы, что и фильтры записей. JSON и JSONB принимают любое допустимое JSON-значение. Значения enum должны соответствовать `enum_values`. Неподдерживаемые типы PostgreSQL, generated-столбцы и `always` identity не могут быть переданы.
 
 Успешный ответ — HTTP 201. PostgreSQL `RETURNING` возвращает полную сохранённую запись в том же безопасном JSON-представлении, что и endpoint списка:
@@ -362,6 +394,8 @@ Create/delete связей аудируются как обычные `create`/`
 ## PATCH /api/resources/{schema}/{resource}/records/{key}
 
 Обновляет только переданные редактируемые поля, не входящие в первичный ключ, и возвращает полную обновлённую запись с HTTP 200. Требуются право `update` и действительный CSRF token; без права возвращается HTTP 403 `FORBIDDEN`. Представления и таблицы без первичного ключа доступны только для чтения. Обновление первичных ключей не поддерживается.
+
+Все переданные поля должны входить в effective `updatable_fields`. Запрещённое поле возвращает HTTP 403 `FIELD_FORBIDDEN` и отклоняет весь PATCH: разрешённые поля смешанного запроса не изменяются, UPDATE и audit не выполняются. Empty effective set возвращает `NO_WRITABLE_FIELDS`. PK/generated/read-only/unknown columns сохраняют прежнюю metadata validation и не обходятся через field permissions.
 
 `{key}` — **URL-кодированный JSON-объект**, содержащий ровно те столбцы, которые входят в первичный ключ ресурса. Порядок полей объекта не важен. Значения используют JSON-представление запроса, включая строки для bigint- и numeric-ключей. Примеры до URL-кодирования:
 
@@ -402,7 +436,7 @@ Backend выполняет `DELETE … RETURNING` и получает факти
 ```
 
 - HTTP 400: `INVALID_RECORD`, `INVALID_RECORD_KEY`, `NOT_NULL_VIOLATION`, `FOREIGN_KEY_VIOLATION` или `CHECK_VIOLATION`.
-- HTTP 403: `FORBIDDEN`, если отсутствует требуемое право; `CSRF_TOKEN_INVALID`, если CSRF token отсутствует или неверен. Read pool остаётся read-only, а database privileges дополнительно ограничивают mutations.
+- HTTP 403: `FORBIDDEN`, если отсутствует требуемое resource право; `FIELD_FORBIDDEN` для поля вне effective set; `NO_WRITABLE_FIELDS` при пустом update set; `CREATE_IMPOSSIBLE`, если required field недоступен для create; `CSRF_TOKEN_INVALID`, если CSRF token отсутствует или неверен. Field-forbidden requests не создают mutation/audit. Read pool остаётся read-only, а database privileges дополнительно ограничивают mutations.
 - HTTP 404: `RESOURCE_NOT_FOUND` или `RECORD_NOT_FOUND`.
 - HTTP 409: `RESOURCE_READ_ONLY` или `UNIQUE_VIOLATION`.
 - HTTP 503: `TARGET_NOT_CONFIGURED`.
@@ -444,7 +478,7 @@ Check constraint требует after для create, before/after для update 
 
 Поля, по имени содержащие пароли, session/CSRF tokens, password hashes, secrets или connection strings, исключаются из audit, включая вложенные JSON-объекты. Ошибки логируются только с типом ошибки и без connection strings, значений записей и секретов. Bigint/numeric используют строки records API, bytea — Base64, а JSON/JSONB обрабатывается как `json.RawMessage`/`json.Number` без преобразования через JavaScript number.
 
-История охватывает только успешные изменения, выполненные через Velmir после внедрения этой функции. Она **не гарантирует фиксацию внешних изменений**, сделанных напрямую в target database. Login/logout, чтение и администрирование пользователей не записываются в audit. Для таблицы без первичного ключа create может сохранить событие с пустым ключом, но history конкретной записи недоступна.
+История охватывает только успешные изменения, выполненные через Velmir после внедрения этой функции. Она **не гарантирует фиксацию внешних изменений**, сделанных напрямую в target database. Login/logout, чтение и администрирование пользователей не записываются в audit. Forbidden field mutations не аудируются; успешные create/update сохраняют прежние actor, record key и before/after, а `AUDIT_WRITE_FAILED` сохраняет `mutation_committed=true` без automatic retry. Field-level read filtering не добавляется: history использует resource-level `read`. Для таблицы без первичного ключа create может сохранить событие с пустым ключом, но history конкретной записи недоступна.
 
 ## GET /api/resources/{schema}/{resource}/records/{key}/history
 

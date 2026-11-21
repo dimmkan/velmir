@@ -152,7 +152,7 @@ func TestSchemaHidesResourcesWithoutReadPermission(t *testing.T) {
 	})
 	catalog := introspection.Catalog{Schemas: []introspection.Schema{
 		{Name: "public", Resources: []introspection.Resource{
-			{Name: "books", ForeignKeys: []introspection.ForeignKey{{ReferencedSchema: "private", ReferencedTable: "secrets"}}},
+			{Name: "books", Kind: "table", ForeignKeys: []introspection.ForeignKey{{ReferencedSchema: "private", ReferencedTable: "secrets"}}},
 			{Name: "notes"},
 		}},
 		{Name: "private", Resources: []introspection.Resource{{Name: "secrets"}}},

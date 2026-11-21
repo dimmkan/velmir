@@ -15,6 +15,10 @@ const resource: ResourceMetadata = {
   kind: 'table',
   primary_key: ['id'],
   foreign_keys: [],
+  creatable_fields: ['title'],
+  updatable_fields: ['title'],
+  can_create: true,
+  can_update: true,
   columns: [
     { name: 'id', data_type: 'bigint', nullable: false, default: null, primary_key: true, identity: 'always', generated: false, editable: false, enum_values: [] },
     { name: 'title', data_type: 'text', nullable: false, default: null, primary_key: false, identity: '', generated: false, editable: true, enum_values: [] },

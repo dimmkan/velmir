@@ -16,12 +16,18 @@ type Schema struct {
 }
 
 type Resource struct {
-	Name             string            `json:"name"`
-	Kind             string            `json:"kind"`
-	Columns          []Column          `json:"columns"`
-	PrimaryKey       []string          `json:"primary_key"`
-	ForeignKeys      []ForeignKey      `json:"foreign_keys"`
-	ReverseRelations []ReverseRelation `json:"reverse_relations"`
+	Name                 string            `json:"name"`
+	Kind                 string            `json:"kind"`
+	Columns              []Column          `json:"columns"`
+	PrimaryKey           []string          `json:"primary_key"`
+	ForeignKeys          []ForeignKey      `json:"foreign_keys"`
+	ReverseRelations     []ReverseRelation `json:"reverse_relations"`
+	CreatableFields      []string          `json:"creatable_fields"`
+	UpdatableFields      []string          `json:"updatable_fields"`
+	CanCreate            bool              `json:"can_create"`
+	CanUpdate            bool              `json:"can_update"`
+	CreateDisabledReason string            `json:"create_disabled_reason,omitempty"`
+	UpdateDisabledReason string            `json:"update_disabled_reason,omitempty"`
 }
 
 type Column struct {
@@ -130,6 +136,8 @@ func buildCatalog(objects []objectRow, columns []columnRow, primaryKeys []primar
 			PrimaryKey:       make([]string, 0),
 			ForeignKeys:      make([]ForeignKey, 0),
 			ReverseRelations: make([]ReverseRelation, 0),
+			CreatableFields:  make([]string, 0),
+			UpdatableFields:  make([]string, 0),
 		})
 	}
 

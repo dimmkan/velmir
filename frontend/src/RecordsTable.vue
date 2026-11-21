@@ -381,6 +381,9 @@ onBeforeUnmount(() => {
       <p v-else-if="!writeEnabled" class="read-only-notice">{{ t('records.readOnlyTarget') }}</p>
       <p v-else-if="resource.kind !== 'table'" class="read-only-notice">{{ t('records.readOnlyView') }}</p>
       <p v-else-if="resource.primary_key.length === 0" class="read-only-notice">{{ t('records.noPrimaryKey') }}</p>
+      <p v-else-if="createAllowed && resource.create_disabled_reason === 'required_field_unavailable'" class="read-only-notice" role="alert">
+        {{ t('form.createImpossible') }}
+      </p>
     </div>
 
     <RecordForm

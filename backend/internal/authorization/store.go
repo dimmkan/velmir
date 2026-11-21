@@ -27,7 +27,7 @@ func NewStore(db DBTX) *Store {
 
 func (s *Store) Permissions(ctx context.Context, userID int64) (Permissions, error) {
 	rows, err := s.db.Query(ctx, `
-		SELECT rp.schema_name, rp.resource_name, rp.permission
+		SELECT r.id, rp.schema_name, rp.resource_name, rp.permission
 		FROM user_roles AS ur
 		JOIN roles AS r ON r.id = ur.role_id
 		JOIN role_permissions AS rp ON rp.role_id = r.id
@@ -36,20 +36,43 @@ func (s *Store) Permissions(ctx context.Context, userID int64) (Permissions, err
 	if err != nil {
 		return nil, fmt.Errorf("load effective permissions: %w", err)
 	}
-	defer rows.Close()
-
 	grants := make([]Grant, 0)
 	for rows.Next() {
 		var grant Grant
-		if err := rows.Scan(&grant.Schema, &grant.Resource, &grant.Operation); err != nil {
+		if err := rows.Scan(&grant.RoleID, &grant.Schema, &grant.Resource, &grant.Operation); err != nil {
+			rows.Close()
 			return nil, fmt.Errorf("read effective permission: %w", err)
 		}
 		grants = append(grants, grant)
 	}
 	if err := rows.Err(); err != nil {
+		rows.Close()
 		return nil, fmt.Errorf("iterate effective permissions: %w", err)
 	}
-	return EffectivePermissions(grants), nil
+	rows.Close()
+
+	fieldRows, err := s.db.Query(ctx, `
+		SELECT fp.role_id, fp.schema_name, fp.resource_name, fp.action, fp.mode, fp.columns
+		FROM user_roles AS ur
+		JOIN role_field_permissions AS fp ON fp.role_id = ur.role_id
+		WHERE ur.user_id = $1
+		ORDER BY fp.schema_name, fp.resource_name, fp.action`, userID)
+	if err != nil {
+		return nil, fmt.Errorf("load effective field permissions: %w", err)
+	}
+	defer fieldRows.Close()
+	fieldGrants := make([]FieldGrant, 0)
+	for fieldRows.Next() {
+		var grant FieldGrant
+		if err := fieldRows.Scan(&grant.RoleID, &grant.Schema, &grant.Resource, &grant.Action, &grant.Mode, &grant.Columns); err != nil {
+			return nil, fmt.Errorf("read effective field permission: %w", err)
+		}
+		fieldGrants = append(fieldGrants, grant)
+	}
+	if err := fieldRows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate effective field permissions: %w", err)
+	}
+	return EffectivePermissionsWithFields(grants, fieldGrants), nil
 }
 
 func (s *Store) IsAdmin(ctx context.Context, userID int64) (bool, error) {

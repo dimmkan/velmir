@@ -17,6 +17,12 @@ export interface ResourceMetadata {
   primary_key: string[]
   foreign_keys: ForeignKeyMetadata[]
   reverse_relations?: ReverseRelationMetadata[]
+  creatable_fields?: string[]
+  updatable_fields?: string[]
+  can_create?: boolean
+  can_update?: boolean
+  create_disabled_reason?: 'required_field_unavailable'
+  update_disabled_reason?: 'no_writable_fields'
 }
 
 export interface ColumnMetadata {
@@ -110,7 +116,13 @@ function isResource(value: unknown): value is ResourceMetadata {
     Array.isArray(value.foreign_keys) &&
     value.foreign_keys.every(isForeignKey) &&
     (value.reverse_relations === undefined ||
-      Array.isArray(value.reverse_relations) && value.reverse_relations.every(isReverseRelation))
+      Array.isArray(value.reverse_relations) && value.reverse_relations.every(isReverseRelation)) &&
+    isStringArray(value.creatable_fields) &&
+    isStringArray(value.updatable_fields) &&
+    typeof value.can_create === 'boolean' &&
+    typeof value.can_update === 'boolean' &&
+    (value.create_disabled_reason === undefined || value.create_disabled_reason === 'required_field_unavailable') &&
+    (value.update_disabled_reason === undefined || value.update_disabled_reason === 'no_writable_fields')
   )
 }
 

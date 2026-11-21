@@ -10,6 +10,7 @@ import {
   initialFormState,
   isFormDirty,
   validateRecordForm,
+  writableFieldNames,
   type FormFieldState,
   type FormMode,
   type RecordFormState,
@@ -62,7 +63,9 @@ const serverErrorStatus = ref(0)
 const fieldErrors = ref<Record<string, string>>({})
 
 const dirty = computed(() => isFormDirty(state.value, initial))
-const formReadOnly = computed(() => props.mode === 'edit' && props.updateAllowed === false)
+const writableFields = computed(() => writableFieldNames(props.mode, props.resource))
+const createImpossible = computed(() => props.mode === 'create' && props.resource.can_create === false)
+const formReadOnly = computed(() => props.mode === 'edit' && (props.updateAllowed === false || props.resource.can_update === false))
 
 const resolvedRelations = computed(() => {
   const relations: RelationView[] = []
@@ -99,6 +102,7 @@ const formEntries = computed<FormEntry[]>(() => {
   const groupedColumns = new Set(resolvedRelations.value.flatMap((relation) => relation.foreignKey.columns.slice(1)))
   const entries: FormEntry[] = []
   for (const column of props.resource.columns) {
+    if (!formReadOnly.value && column.editable && !writableFields.value.has(column.name) && !(props.mode === 'edit' && column.primary_key)) continue
     const relation = byFirstColumn.get(column.name)
     if (relation) entries.push({ key: `relation-${relation.foreignKey.name}`, kind: 'relation', relation })
     else if (!groupedColumns.has(column.name)) entries.push({ key: column.name, kind: 'column', column })
@@ -156,7 +160,7 @@ function inputPlaceholder(column: ColumnMetadata): string {
 }
 
 function isReadOnly(column: ColumnMetadata): boolean {
-  return formReadOnly.value || !column.editable || (props.mode === 'edit' && column.primary_key)
+  return formReadOnly.value || !column.editable || !writableFields.value.has(column.name) || (props.mode === 'edit' && column.primary_key)
 }
 
 function readOnlyText(column: ColumnMetadata): string {
@@ -233,7 +237,7 @@ function relationError(relation: RelationView): string {
 }
 
 async function save() {
-  if (formReadOnly.value) return
+  if (formReadOnly.value || createImpossible.value) return
   serverError.value = ''
   serverErrorCode.value = ''
   serverErrorStatus.value = 0
@@ -316,7 +320,15 @@ function baseType(dataType: string): string {
       <code v-if="serverErrorCode">{{ serverErrorCode }}</code>
     </div>
 
-    <form class="record-form" @submit.prevent="save">
+    <div v-if="createImpossible" class="form-server-error" role="alert">
+      <strong>{{ t('form.createImpossibleTitle') }}</strong>
+      <p>{{ t(resource.create_disabled_reason === 'required_field_unavailable' ? 'form.requiredFieldUnavailable' : 'form.noWritableFields') }}</p>
+    </div>
+
+    <form v-else class="record-form" @submit.prevent="save">
+      <p v-if="formReadOnly && resource.update_disabled_reason === 'no_writable_fields'" class="read-only-notice" role="status">
+        {{ t('form.noWritableFields') }}
+      </p>
       <template v-for="entry in formEntries" :key="entry.key">
         <div v-if="entry.kind === 'relation'" class="record-form-field relation-form-field">
           <div class="field-label">

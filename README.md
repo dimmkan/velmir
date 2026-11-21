@@ -252,7 +252,7 @@ npm run dev
 
 Открывайте Vite URL (обычно `http://localhost:5173`). Vite проксирует `/api`, `/healthz`, `/readyz`; cookies остаются same-origin. Production Go server сам отдаёт `dist`, hashed assets с long-term cache и `index.html` с `no-cache`; `/api/*` никогда не попадает в SPA fallback.
 
-**H2 hardening:** добавлены optional Caddy HTTPS, explicit trusted proxy configuration, CSP/HSTS, Docker secrets, session maintenance и admin backup/restore. Автоматических GRANT/DDL в target нет; field-level permissions не реализованы и остаются следующим функциональным этапом.
+**H2 hardening:** добавлены optional Caddy HTTPS, explicit trusted proxy configuration, CSP/HSTS, Docker secrets, session maintenance и admin backup/restore. Автоматических GRANT/DDL в target нет. Этап 8A добавляет field-level permissions только для create/update; field-level read filtering не реализован.
 
 ## Дизайн и язык интерфейса
 
@@ -275,6 +275,14 @@ Bootstrap-администратор получает `admin` автоматич
 
 Администратору доступен отдельный раздел **Administration**: создание пользователей, смена display name, включение/отключение, сброс пароля и назначение ролей, а также создание и редактирование пользовательских ролей и их permissions. Раздел скрыт от viewer и пользователей без роли, но backend независимо проверяет системную роль `admin`, session и CSRF. Отключение и сброс пароля отзывают все сессии пользователя. Запрещены самоотключение, снятие собственной роли `admin` и удаление admin-прав у последнего активного администратора. Системные роли не редактируются; wildcard `*.*` и конкретные schema/resource поддерживают `read`, `create`, `update`, `delete`. Пользовательская роль получает `delete` только после явного назначения в PermissionEditor; миграция не добавляет его существующим custom roles. Изменения применяются к следующим запросам без перезапуска. Полные API-контракты приведены в `docs/api.md`.
 
+### Field permissions для create/update
+
+Для пользовательских ролей с concrete schema/resource PermissionEditor поддерживает независимые настройки полей для `create` и `update`: **Все доступные поля** (`unrestricted`) или **Выбранные поля** (`allowlist`). Пустой allowlist — отдельное явное состояние «Нет доступных полей», а не unrestricted. Generated, identity, PK и read-only columns нельзя включить в allowlist; wildcard `*.*` всегда unrestricted и не предлагает field restrictions. Системные роли остаются неизменяемыми: `admin` unrestricted, `viewer` без create/update.
+
+Миграция admin database сохраняет прежние возможности существующих ролей через unrestricted; старые API payloads без field configuration также означают unrestricted. При объединении ролей хотя бы один unrestricted для resource/action делает effective доступ unrestricted, иначе allowlists объединяются. Пустой allowlist добавляет ноль полей и не снимает права других ролей. Изменения действуют на следующий запрос без restart.
+
+`/api/schema` возвращает backend-computed `creatable_fields`, `updatable_fields`, `can_create`, `can_update` и причины недоступности из-за fields. Frontend использует их для controls, payload, FK selectors и junction create; backend независимо отклоняет запрещённые и смешанные POST/PATCH до mutation и audit. Если обязательное NOT NULL поле без default/generated недоступно, create не предлагается и возвращает безопасный structured 403. Field-level read filtering отсутствует: read visibility списков, history и related labels не изменяется.
+
 CLI `cmd/users` сохраняется для локального администрирования и восстановления доступа. После применения миграций используйте команды из каталога `backend`:
 
 ```powershell
@@ -292,10 +300,10 @@ go run ./cmd/users list
 
 ## Базы данных и безопасность записи
 
-- **Admin database** (`velmir_admin`) принадлежит Velmir. Отдельный migrate CLI применяет Goose-миграции только здесь и создаёт `users`, `sessions`, `roles`, `user_roles`, `role_permissions` и `audit_events`.
+- **Admin database** (`velmir_admin`) принадлежит Velmir. Отдельный migrate CLI применяет Goose-миграции только здесь и создаёт `users`, `sessions`, `roles`, `user_roles`, `role_permissions`, `role_field_permissions` и `audit_events`.
 - **Demo target database** (`velmir_demo`) — отдельный PostgreSQL, созданный только demo override. Существующие initialization fixtures создают демонстрационные таблицы, записи, представление, PK/FK и локальные роли; последующих автоматических GRANT нет.
-- `TARGET_DATABASE_URL` — единый optional DSN. Из него создаются два пула: read pool всегда устанавливает `default_transaction_read_only=on`, mutation pool используется только поддерживаемыми INSERT/UPDATE/DELETE после RBAC/CSRF checks.
-- `write_enabled` зависит от настроенного target и effective Velmir permissions. Фактическая возможность mutation также ограничена privileges PostgreSQL role; viewer остаётся read-only через Velmir authorization даже с полноправным DSN.
+- `TARGET_DATABASE_URL` — единый optional DSN. Из него создаются два пула: read pool всегда устанавливает `default_transaction_read_only=on`, mutation pool используется только поддерживаемыми INSERT/UPDATE/DELETE после resource/field RBAC и CSRF checks. Отдельного writer DSN нет.
+- `write_enabled` зависит от настроенного target, action permissions и реально возможной записи с учётом effective fields. Фактическая возможность mutation также ограничена privileges PostgreSQL role; viewer остаётся read-only через Velmir authorization даже с полноправным DSN.
 - Velmir никогда не выполняет миграции, автоматические GRANT, DDL или arbitrary SQL в target database. Не указывайте integration-тесты или target URL на реальную базу для локальной demo настройки.
 
 Для полного CRUD владелец target database заранее выдаёт application role только необходимые privileges: `CONNECT` на database, `USAGE` на используемые schemas, `SELECT` для чтения и `INSERT`, `UPDATE`, `DELETE` на разрешённые таблицы, а также `USAGE`, `SELECT`, `UPDATE` на sequences, необходимые для default/identity values. Для read-only role достаточно `CONNECT`, schema `USAGE` и `SELECT`. Права `CREATE`, `ALTER`, `DROP`, `TRUNCATE` приложению не нужны. Velmir сам их не выдаёт.
@@ -305,6 +313,8 @@ go run ./cmd/users list
 ## Создание, редактирование и удаление записей
 
 Frontend строит все формы на основе `/api/schema`; форм для конкретных таблиц нет. Поддерживаются text, boolean, integer, bigint/numeric, date, timestamps, UUID, enums и JSON. Для nullable-полей есть отдельный NULL control, а в формах создания можно явно использовать database default. Сгенерированные поля и `always` identity не являются обязательными и не редактируются.
+
+В create/update формы используют только effective `creatable_fields`/`updatable_fields`: недоступные controls скрываются, их старые значения не попадают в payload, required validation применяется лишь к доступным полям. Пустой update set отключает editing без изменения read-only detail. Недоступный FK скрывает many-to-one selector. Переключение ru/en не сбрасывает значения формы.
 
 Для обновления и удаления требуется первичный ключ, в том числе составной; поля первичного ключа изменять нельзя. В таблицах без первичного ключа можно создавать записи, но нельзя обновлять или удалять. Представления доступны только для чтения. Неподдерживаемые типы PostgreSQL отображаются, но автоматически не редактируются. Нарушения PostgreSQL not-null, unique, foreign-key и check отображаются как ошибки API/формы.
 
@@ -328,7 +338,7 @@ Label выбирается в порядке `display_name`, `name`, `title`, `l
 
 Parent form/detail generic-образом показывает target records через поддерживаемую PostgreSQL junction table. Detection использует только RBAC-filtered `/api/schema`: нужны ровно два many-to-one FK к разным ресурсам и composite PK ровно из колонок обоих FK; дополнительные поля должны быть nullable или иметь default/generated/identity values. Self-referential relations, surrogate PK, три и более FK и обязательные дополнительные junction attributes без default/generated не поддерживаются и остаются обычными ресурсами/reverse panels.
 
-Для панели нужны `read` на parent, target и junction. Записи загружаются существующим records list с typed parent filters и pagination, labels — одним batch relations/resolve на страницу. **Добавить связь** требует writer, `create` на junction и `read` на target, использует selector с server-side search и обычный flat junction POST. **Удалить связь** требует writer и `delete` на junction, использует DELETE по полному composite junction PK. Её confirmation прямо сообщает, что удаляется только junction record, а parent/target records остаются без изменений; это не обычное **Удалить запись**. Права `update` на parent/target не нужны.
+Для панели нужны `read` на parent, target и junction. Записи загружаются существующим records list с typed parent filters и pagination, labels — одним batch relations/resolve на страницу. **Добавить связь** требует writer, `create` на junction, все необходимые junction FK columns в `creatable_fields` и `read` на target; использует selector с server-side search и обычный flat junction POST. **Удалить связь** требует writer и `delete` на junction, использует DELETE по полному composite junction PK. Её confirmation прямо сообщает, что удаляется только junction record, а parent/target records остаются без изменений; это не обычное **Удалить запись**. Права `update` на parent/target не нужны.
 
 Создание и удаление связи создают обычные audit `create`/`delete` только для junction resource. Duplicate/failed mutations не аудируются; после `AUDIT_WRITE_FAILED` committed связь не повторяется автоматически, список обновляется с отдельным предупреждением. Editor не поддерживает nested mutations, создание связанных записей или редактирование дополнительных junction attributes. Подробности и полная permission matrix приведены в `docs/api.md`.
 

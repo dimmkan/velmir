@@ -238,7 +238,7 @@ func adminRoles(service administrationService) http.HandlerFunc {
 	}
 }
 
-func createAdminRole(service administrationService) http.HandlerFunc {
+func createAdminRole(service administrationService, inspector schemaInspector) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var request roleRequest
 		if !decodeAdminRequest(w, r, &request) {
@@ -249,6 +249,9 @@ func createAdminRole(service administrationService) http.HandlerFunc {
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), adminRequestTimeout)
 		defer cancel()
+		if !validateAdminPermissionMetadata(ctx, w, inspector, request.Permissions) {
+			return
+		}
 		role, err := service.CreateRole(ctx, request.Name, request.Description, request.Permissions)
 		if err != nil {
 			writeAdminError(w, err)
@@ -278,7 +281,7 @@ func updateAdminRole(service administrationService) http.HandlerFunc {
 	}
 }
 
-func replaceAdminRolePermissions(service administrationService) http.HandlerFunc {
+func replaceAdminRolePermissions(service administrationService, inspector schemaInspector) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		roleID, ok := adminPathID(w, r, "roleID", "ROLE_NOT_FOUND")
 		if !ok {
@@ -294,12 +297,43 @@ func replaceAdminRolePermissions(service administrationService) http.HandlerFunc
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), adminRequestTimeout)
 		defer cancel()
+		if !validateAdminPermissionMetadata(ctx, w, inspector, request.Permissions) {
+			return
+		}
 		if err := service.ReplaceRolePermissions(ctx, roleID, request.Permissions); err != nil {
 			writeAdminError(w, err)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+func validateAdminPermissionMetadata(ctx context.Context, w http.ResponseWriter, inspector schemaInspector, permissions authorization.Permissions) bool {
+	hasFieldPermissions := false
+	for _, permission := range permissions {
+		hasFieldPermissions = hasFieldPermissions || len(permission.FieldPermissions) > 0
+	}
+	if !hasFieldPermissions {
+		return true
+	}
+	if err := authorization.ValidatePermissions(permissions); err != nil {
+		writeAdminError(w, &auth.AdminValidationError{Field: "permissions", Message: err.Error()})
+		return false
+	}
+	if inspector == nil {
+		writeTargetNotConfigured(w)
+		return false
+	}
+	catalog, err := inspector.Inspect(ctx)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: apiError{Code: "SCHEMA_INTROSPECTION_FAILED", Message: "Could not read target database schema"}})
+		return false
+	}
+	if err := authorization.ValidatePermissionColumns(permissions, catalog); err != nil {
+		writeAdminError(w, &auth.AdminValidationError{Field: "permissions", Message: err.Error()})
+		return false
+	}
+	return true
 }
 
 func decodeAdminRequest(w http.ResponseWriter, r *http.Request, destination any) bool {

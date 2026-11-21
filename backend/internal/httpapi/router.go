@@ -105,9 +105,9 @@ func NewRouter(adminDatabase, targetDatabase databasePinger, inspector schemaIns
 			admin.With(requireCSRF).Put("/users/{userID}/roles/{roleID}", assignAdminRole(administration))
 			admin.With(requireCSRF).Delete("/users/{userID}/roles/{roleID}", removeAdminRole(administration))
 			admin.Get("/roles", adminRoles(administration))
-			admin.With(requireCSRF).Post("/roles", createAdminRole(administration))
+			admin.With(requireCSRF).Post("/roles", createAdminRole(administration, inspector))
 			admin.With(requireCSRF).Patch("/roles/{roleID}", updateAdminRole(administration))
-			admin.With(requireCSRF).Put("/roles/{roleID}/permissions", replaceAdminRolePermissions(administration))
+			admin.With(requireCSRF).Put("/roles/{roleID}/permissions", replaceAdminRolePermissions(administration, inspector))
 		})
 	})
 	router.NotFound(func(w http.ResponseWriter, _ *http.Request) {
@@ -159,7 +159,12 @@ func schema(inspector schemaInspector, writeEnabled bool) http.HandlerFunc {
 		}
 		permissions := currentPermissions(r)
 		catalog = filterReadableCatalog(catalog, permissions)
-		catalog.WriteEnabled = writeEnabled && permissions.HasAny(authorization.Create, authorization.Update, authorization.Delete)
+		for schemaIndex := range catalog.Schemas {
+			for resourceIndex := range catalog.Schemas[schemaIndex].Resources {
+				applyFieldPermissions(catalog.Schemas[schemaIndex].Name, &catalog.Schemas[schemaIndex].Resources[resourceIndex], permissions, writeEnabled)
+			}
+		}
+		catalog.WriteEnabled = writeEnabled && catalogHasRealWrite(catalog, permissions)
 		writeJSON(w, http.StatusOK, catalog)
 	}
 }
@@ -292,6 +297,9 @@ func createRecord(inspector schemaInspector, writer recordWriter, auditStore rec
 		if !ok {
 			return
 		}
+		if !enforceMutationFields(w, r, resource, authorization.Create, values) {
+			return
+		}
 		schemaName := chi.URLParam(r, "schema")
 		record, err := writer.Create(ctx, schemaName, resource, values)
 		if err != nil {
@@ -329,6 +337,9 @@ func updateRecord(inspector schemaInspector, writer recordWriter, auditStore rec
 		key, err := url.PathUnescape(chi.URLParam(r, "key"))
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, errorResponse{Error: apiError{Code: "INVALID_RECORD_KEY", Message: "Record key is not valid URL-encoded JSON"}})
+			return
+		}
+		if !enforceMutationFields(w, r, resource, authorization.Update, values) {
 			return
 		}
 		schemaName := chi.URLParam(r, "schema")
@@ -536,6 +547,8 @@ func writeMutationError(w http.ResponseWriter, err error) {
 			status = http.StatusConflict
 		case "RECORD_NOT_FOUND":
 			status = http.StatusNotFound
+		case "FIELD_FORBIDDEN", "NO_WRITABLE_FIELDS", "CREATE_IMPOSSIBLE":
+			status = http.StatusForbidden
 		}
 		writeJSON(w, status, errorResponse{Error: apiError{Code: mutationErr.Code, Message: mutationErr.Message, FieldErrors: mutationErr.FieldErrors}})
 		return
