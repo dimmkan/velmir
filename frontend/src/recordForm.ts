@@ -1,5 +1,5 @@
 import type { RecordRow } from './records'
-import type { ColumnMetadata, ResourceMetadata } from './schema'
+import { isWriteOnlyColumn, type ColumnMetadata, type ResourceMetadata } from './schema'
 import type { RecordValues } from './mutations'
 
 export type FormMode = 'create' | 'edit'
@@ -74,12 +74,14 @@ export function validateRecordForm(
   mode: FormMode,
   resource: ResourceMetadata,
   state: RecordFormState,
+  initial?: RecordFormState,
 ): FormErrors {
   const errors: FormErrors = {}
   const allowed = writableFieldNames(mode, resource)
   for (const column of resource.columns) {
     if (!allowed.has(column.name) || !column.editable || (mode === 'edit' && column.primary_key)) continue
     const field = state[column.name]
+    if (mode === 'edit' && isWriteOnlyColumn(resource, column) && field && initial?.[column.name] && fieldsEqual(field, initial[column.name])) continue
     if (!field) {
       if (!column.nullable) errors[column.name] = 'validation.required'
       continue

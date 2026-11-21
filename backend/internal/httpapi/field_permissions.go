@@ -18,8 +18,10 @@ const (
 func applyFieldPermissions(schemaName string, resource *introspection.Resource, permissions authorization.Permissions, writeEnabled bool) {
 	createAccess := permissions.EffectiveFields(schemaName, resource.Name, authorization.Create)
 	updateAccess := permissions.EffectiveFields(schemaName, resource.Name, authorization.Update)
+	readAccess := permissions.EffectiveFields(schemaName, resource.Name, authorization.Read)
 	resource.CreatableFields = effectiveResourceFields(*resource, createAccess, authorization.Create)
 	resource.UpdatableFields = effectiveResourceFields(*resource, updateAccess, authorization.Update)
+	resource.ReadableFields = effectiveReadableFields(*resource, readAccess)
 	resource.CanCreate = writeEnabled && resource.Kind == "table" && createAccess.Granted && !hasUnavailableRequiredField(*resource, resource.CreatableFields)
 	if createAccess.Granted && resource.Kind == "table" && hasUnavailableRequiredField(*resource, resource.CreatableFields) {
 		resource.CreateDisabledReason = createDisabledRequired
@@ -28,6 +30,26 @@ func applyFieldPermissions(schemaName string, resource *introspection.Resource, 
 	if updateAccess.Granted && resource.Kind == "table" && len(resource.PrimaryKey) > 0 && len(resource.UpdatableFields) == 0 {
 		resource.UpdateDisabledReason = updateDisabledNoFields
 	}
+	readable := fieldSet(resource.ReadableFields)
+	visible := fieldSet(resource.ReadableFields)
+	creatableFields := fieldSet(resource.CreatableFields)
+	updatableFields := fieldSet(resource.UpdatableFields)
+	resource.WriteOnlyFields = make([]string, 0)
+	for _, column := range resource.Columns {
+		_, creatable := creatableFields[column.Name]
+		_, updatable := updatableFields[column.Name]
+		if _, ok := readable[column.Name]; !ok && (creatable || updatable) {
+			resource.WriteOnlyFields = append(resource.WriteOnlyFields, column.Name)
+			visible[column.Name] = struct{}{}
+		}
+	}
+	columns := make([]introspection.Column, 0, len(visible))
+	for _, column := range resource.Columns {
+		if _, ok := visible[column.Name]; ok {
+			columns = append(columns, column)
+		}
+	}
+	resource.Columns = columns
 }
 
 func effectiveResourceFields(resource introspection.Resource, access authorization.FieldAccess, action authorization.Operation) []string {

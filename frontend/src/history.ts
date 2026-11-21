@@ -1,6 +1,6 @@
 import { handleUnauthorized } from './auth'
 import type { RecordRow } from './records'
-import type { ColumnMetadata, ResourceMetadata } from './schema'
+import { readableColumns, type ColumnMetadata, type ResourceMetadata } from './schema'
 
 export const DEFAULT_HISTORY_LIMIT = 20
 export const MAX_HISTORY_LIMIT = 100
@@ -47,7 +47,7 @@ export class HistoryRequestError extends Error {
 
 export function historyChanges(event: HistoryEvent, resource: ResourceMetadata): HistoryChange[] {
   const changes: HistoryChange[] = []
-  for (const column of resource.columns) {
+  for (const column of readableColumns(resource)) {
     const hasBefore = event.before !== null && Object.hasOwn(event.before, column.name)
     const hasAfter = event.after !== null && Object.hasOwn(event.after, column.name)
     if (event.action === 'create' && hasAfter) {

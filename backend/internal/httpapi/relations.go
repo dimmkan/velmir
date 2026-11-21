@@ -49,8 +49,11 @@ func resolveRelations(inspector schemaInspector, lister recordLister) http.Handl
 			return
 		}
 		permissions := currentPermissions(r)
-		plans, err := records.PrepareRelationResolve(request, current, catalog, func(schema, resource string) bool {
+		plans, err := records.PrepareRelationResolve(request, current, chi.URLParam(r, "schema"), catalog, func(schema, resource string) bool {
 			return permissions.Allows(schema, resource, authorization.Read)
+		}, func(schema, resource, column string) bool {
+			metadata, ok := catalog.FindResource(schema, resource)
+			return ok && readableColumn(permissions, schema, metadata, column)
 		})
 		if errors.Is(err, records.ErrRelationResolveForbidden) {
 			writeForbidden(w)

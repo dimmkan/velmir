@@ -44,11 +44,11 @@ describe('PermissionEditor field permissions', () => {
       global: { plugins: [i18n] },
     })
     const radios = wrapper.findAll('input[type="radio"]')
-    expect(radios).toHaveLength(4)
+    expect(radios).toHaveLength(6)
     expect((radios[0].element as HTMLInputElement).checked).toBe(true)
-    await radios[3].setValue(true)
+    await radios[5].setValue(true)
     let current = wrapper.emitted('change')!.at(-1)![0] as ResourcePermission[]
-    expect(current[0].field_permissions![1]).toEqual({ action: 'update', mode: 'allowlist', columns: [] })
+    expect(current[0].field_permissions?.find((field) => field.action === 'update')).toEqual({ action: 'update', mode: 'allowlist', columns: [] })
     await wrapper.setProps({ permissions: current })
     expect(wrapper.get('.empty-allowlist-warning').text()).toContain('Нет доступных полей')
     const labels = wrapper.findAll('.field-permission-columns label').map((label) => label.text())
@@ -56,7 +56,7 @@ describe('PermissionEditor field permissions', () => {
 
     await wrapper.get('.field-permission-columns input').setValue(true)
     current = wrapper.emitted('change')!.at(-1)![0] as ResourcePermission[]
-    expect(current[0].field_permissions![1].columns).toEqual(['title'])
+    expect(current[0].field_permissions?.find((field) => field.action === 'update')?.columns).toEqual(['title'])
     await wrapper.setProps({ permissions: current })
     expect(wrapper.find('.empty-allowlist-warning').exists()).toBe(false)
 

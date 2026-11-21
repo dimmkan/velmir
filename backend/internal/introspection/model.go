@@ -22,6 +22,8 @@ type Resource struct {
 	PrimaryKey           []string          `json:"primary_key"`
 	ForeignKeys          []ForeignKey      `json:"foreign_keys"`
 	ReverseRelations     []ReverseRelation `json:"reverse_relations"`
+	ReadableFields       []string          `json:"readable_fields"`
+	WriteOnlyFields      []string          `json:"write_only_fields"`
 	CreatableFields      []string          `json:"creatable_fields"`
 	UpdatableFields      []string          `json:"updatable_fields"`
 	CanCreate            bool              `json:"can_create"`
@@ -136,6 +138,8 @@ func buildCatalog(objects []objectRow, columns []columnRow, primaryKeys []primar
 			PrimaryKey:       make([]string, 0),
 			ForeignKeys:      make([]ForeignKey, 0),
 			ReverseRelations: make([]ReverseRelation, 0),
+			ReadableFields:   make([]string, 0),
+			WriteOnlyFields:  make([]string, 0),
 			CreatableFields:  make([]string, 0),
 			UpdatableFields:  make([]string, 0),
 		})

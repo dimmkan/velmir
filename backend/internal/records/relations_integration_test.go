@@ -45,7 +45,7 @@ func TestLocalDatabaseResolveSimpleAndCompositeRelations(t *testing.T) {
 			rawKey(t, map[string]any{"id": nil}),
 		},
 	}}}
-	plans, err := PrepareRelationResolve(request, books, catalog, allowAllRelations)
+	plans, err := PrepareRelationResolve(request, books, "public", catalog, allowAllRelations, allowAllRelationFields)
 	if err != nil {
 		t.Fatal(err)
 	}

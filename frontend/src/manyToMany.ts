@@ -1,7 +1,7 @@
 import { can } from './auth'
 import { findReferencedResource, relationValuesKey } from './relation'
 import { filterOperators, type RecordFilter, type RecordRow } from './records'
-import type { ForeignKeyMetadata, ResourceMetadata, SchemaMetadata } from './schema'
+import { readableColumns, type ForeignKeyMetadata, type ResourceMetadata, type SchemaMetadata } from './schema'
 
 export interface ManyToManyRelation {
   id: string
@@ -71,6 +71,8 @@ export function detectManyToManyRelation(
     junctionResource.primary_key.some((column) => !foreignKeyColumns.includes(column))
   ) return null
 
+  const junctionReadable = new Set(readableColumns(junctionResource).map((column) => column.name))
+  if (foreignKeyColumns.some((name) => !junctionReadable.has(name))) return null
   const foreignKeyColumnSet = new Set(foreignKeyColumns)
   if (foreignKeyColumns.some((name) => {
     const column = junctionResource.columns.find((item) => item.name === name)
@@ -164,7 +166,7 @@ function validForeignKey(foreignKey: ForeignKeyMetadata): boolean {
 
 function supportedReferencedColumns(resource: ResourceMetadata, names: string[]): boolean {
   return names.length > 0 && names.every((name) => {
-    const column = resource.columns.find((item) => item.name === name)
+    const column = readableColumns(resource).find((item) => item.name === name)
     return column && filterOperators(column.data_type).includes('eq')
   })
 }

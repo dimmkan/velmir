@@ -1,5 +1,5 @@
 import { isTextColumn, type RecordFilter, type RecordRow } from './records'
-import type { ResourceMetadata, SchemaMetadata } from './schema'
+import { readableColumns, type ResourceMetadata, type SchemaMetadata } from './schema'
 
 export interface RelationOption {
   record: RecordRow
@@ -57,13 +57,14 @@ export function exactRelationFilters(referencedColumns: string[], values: unknow
 }
 
 function displayLabel(record: RecordRow, resource: ResourceMetadata): string {
+  const columns = readableColumns(resource)
   const prioritized = ['display_name', 'name', 'title', 'label']
   for (const name of prioritized) {
-    const column = resource.columns.find((item) => item.name === name)
+    const column = columns.find((item) => item.name === name)
     const value = readableText(record[name], column)
     if (value) return value
   }
-  for (const column of resource.columns) {
+  for (const column of columns) {
     if (prioritized.includes(column.name)) continue
     const value = readableText(record[column.name], column)
     if (value) return value

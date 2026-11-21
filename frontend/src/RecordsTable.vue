@@ -17,7 +17,7 @@ import {
   type RecordsQueryState,
   type RecordsResponse,
 } from './records'
-import type { ResourceMetadata, SchemaMetadata } from './schema'
+import { readableColumns, type ResourceMetadata, type SchemaMetadata } from './schema'
 import RecordForm from './RecordForm.vue'
 import RecordHistory from './RecordHistory.vue'
 import RecordDeleteDialog from './RecordDeleteDialog.vue'
@@ -76,9 +76,10 @@ let relatedController: AbortController | null = null
 let requestID = 0
 let timeout = 0
 
-const searchableColumns = computed(() => props.resource.columns.filter(isTextColumn))
+const visibleColumns = computed(() => readableColumns(props.resource))
+const searchableColumns = computed(() => visibleColumns.value.filter(isTextColumn))
 const selectedFilterColumn = computed(() =>
-  props.resource.columns.find((column) => column.name === filterColumn.value),
+  visibleColumns.value.find((column) => column.name === filterColumn.value),
 )
 const selectedFilterOperators = computed(() =>
   selectedFilterColumn.value ? filterOperators(selectedFilterColumn.value.data_type) : (['is_null'] as FilterOperator[]),
@@ -218,8 +219,8 @@ function syncFromURL() {
   state.value = parseRecordsQuery(window.location.search, props.resource)
   searchInput.value = state.value.search
   searchColumn.value = state.value.searchColumns.length === 1 ? state.value.searchColumns[0] : ''
-  if (!props.resource.columns.some((column) => column.name === filterColumn.value)) {
-    filterColumn.value = props.resource.columns[0]?.name ?? ''
+  if (!visibleColumns.value.some((column) => column.name === filterColumn.value)) {
+    filterColumn.value = visibleColumns.value[0]?.name ?? ''
   }
   resetFilterOperator()
   void loadRecords()
@@ -451,7 +452,7 @@ onBeforeUnmount(() => {
         <label>
           <span>{{ t('records.column') }}</span>
           <select v-model="filterColumn" @change="resetFilterOperator">
-            <option v-for="column in resource.columns" :key="column.name" :value="column.name">{{ column.name }} · {{ column.data_type }}</option>
+            <option v-for="column in visibleColumns" :key="column.name" :value="column.name">{{ column.name }} · {{ column.data_type }}</option>
           </select>
         </label>
         <label>
@@ -503,7 +504,7 @@ onBeforeUnmount(() => {
       <table class="records-table">
         <thead>
           <tr>
-            <th v-for="column in resource.columns" :key="column.name" :aria-sort="state.sort === column.name ? (state.direction === 'asc' ? 'ascending' : 'descending') : 'none'">
+            <th v-for="column in visibleColumns" :key="column.name" :aria-sort="state.sort === column.name ? (state.direction === 'asc' ? 'ascending' : 'descending') : 'none'">
               <button v-if="isSortableColumn(column)" type="button" class="sort-button" :aria-label="t('records.sortBy', { column: column.name })" @click="sortBy(column.name)">
                 {{ column.name }}
                 <span v-if="state.sort === column.name" aria-hidden="true">{{ state.direction === 'asc' ? '↑' : '↓' }}</span>
@@ -517,7 +518,7 @@ onBeforeUnmount(() => {
         <tbody>
           <tr v-for="(record, rowIndex) in result.records" :key="rowIndex">
             <td
-              v-for="column in resource.columns"
+              v-for="column in visibleColumns"
               :key="column.name"
               :class="{ 'null-value': record[column.name] === null, 'json-value': typeof record[column.name] === 'object' && record[column.name] !== null }"
             >

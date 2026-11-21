@@ -16,7 +16,7 @@ import {
   type RecordFormState,
 } from './recordForm'
 import { buildRecordKey, createRecord, MutationRequestError, updateRecord } from './mutations'
-import type { ColumnMetadata, ForeignKeyMetadata, ResourceMetadata, SchemaMetadata } from './schema'
+import { isWriteOnlyColumn, readableColumns, type ColumnMetadata, type ForeignKeyMetadata, type ResourceMetadata, type SchemaMetadata } from './schema'
 import { findReferencedResource } from './relation'
 import RelationSelector from './RelationSelector.vue'
 import ReverseRelationPanel from './ReverseRelationPanel.vue'
@@ -101,7 +101,9 @@ const formEntries = computed<FormEntry[]>(() => {
   const byFirstColumn = new Map(resolvedRelations.value.map((relation) => [relation.foreignKey.columns[0], relation]))
   const groupedColumns = new Set(resolvedRelations.value.flatMap((relation) => relation.foreignKey.columns.slice(1)))
   const entries: FormEntry[] = []
+  const readable = new Set(readableColumns(props.resource).map((column) => column.name))
   for (const column of props.resource.columns) {
+    if (formReadOnly.value && !readable.has(column.name)) continue
     if (!formReadOnly.value && column.editable && !writableFields.value.has(column.name) && !(props.mode === 'edit' && column.primary_key)) continue
     const relation = byFirstColumn.get(column.name)
     if (relation) entries.push({ key: `relation-${relation.foreignKey.name}`, kind: 'relation', relation })
@@ -164,6 +166,7 @@ function isReadOnly(column: ColumnMetadata): boolean {
 }
 
 function readOnlyText(column: ColumnMetadata): string {
+  if (isWriteOnlyColumn(props.resource, column)) return t('form.hiddenCurrentValue')
   if (formReadOnly.value) return formatRecordValue(props.record?.[column.name], column.data_type, locale.value)
   if (column.generated) return t('form.generated')
   if (column.identity === 'always') return t('form.generatedIdentity')
@@ -241,7 +244,7 @@ async function save() {
   serverError.value = ''
   serverErrorCode.value = ''
   serverErrorStatus.value = 0
-  fieldErrors.value = validateRecordForm(props.mode, props.resource, state.value)
+  fieldErrors.value = validateRecordForm(props.mode, props.resource, state.value, initial)
   if (Object.keys(fieldErrors.value).length > 0) {
     const firstInvalid = props.resource.columns.find((column) => fieldErrors.value[column.name])
     await nextTick()
@@ -431,6 +434,9 @@ function baseType(dataType: string): string {
               @input="editField(state[entry.column.name])"
             />
           </template>
+          <p v-if="mode === 'edit' && isWriteOnlyColumn(resource, entry.column)" class="read-only-notice" role="status">
+            {{ t('form.hiddenCurrentValue') }}
+          </p>
           <p v-if="unavailableRelation(entry.column.name)" class="relation-unavailable">{{ t('relation.unavailable') }}</p>
           <p v-if="fieldErrors[entry.column.name]" class="field-error" role="alert">{{ t(fieldErrors[entry.column.name]) }}</p>
         </div>

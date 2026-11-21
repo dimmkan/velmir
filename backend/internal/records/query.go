@@ -21,7 +21,7 @@ func BuildSelectQuery(resource introspection.Resource, schemaName string, option
 	for _, column := range resource.Columns {
 		columns = append(columns, quoteIdentifier(column.Name))
 	}
-	selectList := "*"
+	selectList := "NULL"
 	if len(columns) > 0 {
 		selectList = strings.Join(columns, ", ")
 	}

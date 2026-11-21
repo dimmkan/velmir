@@ -17,6 +17,8 @@ export interface ResourceMetadata {
   primary_key: string[]
   foreign_keys: ForeignKeyMetadata[]
   reverse_relations?: ReverseRelationMetadata[]
+  readable_fields?: string[]
+  write_only_fields?: string[]
   creatable_fields?: string[]
   updatable_fields?: string[]
   can_create?: boolean
@@ -117,6 +119,8 @@ function isResource(value: unknown): value is ResourceMetadata {
     value.foreign_keys.every(isForeignKey) &&
     (value.reverse_relations === undefined ||
       Array.isArray(value.reverse_relations) && value.reverse_relations.every(isReverseRelation)) &&
+    (value.readable_fields === undefined || isStringArray(value.readable_fields)) &&
+    (value.write_only_fields === undefined || isStringArray(value.write_only_fields)) &&
     isStringArray(value.creatable_fields) &&
     isStringArray(value.updatable_fields) &&
     typeof value.can_create === 'boolean' &&
@@ -142,6 +146,18 @@ function errorCode(value: unknown) {
     return 'SCHEMA_REQUEST_FAILED'
   }
   return value.error.code
+}
+
+export function readableColumns(resource: ResourceMetadata): ColumnMetadata[] {
+  if (!resource.readable_fields) return resource.columns
+  const readable = new Set(resource.readable_fields)
+  return resource.columns.filter((column) => readable.has(column.name))
+}
+
+export function isWriteOnlyColumn(resource: ResourceMetadata, column: ColumnMetadata): boolean {
+  return resource.write_only_fields?.includes(column.name) ??
+    (!(resource.readable_fields?.includes(column.name) ?? true) &&
+      ((resource.creatable_fields?.includes(column.name) ?? false) || (resource.updatable_fields?.includes(column.name) ?? false)))
 }
 
 export async function fetchSchema(backendBaseURL: string, signal?: AbortSignal) {

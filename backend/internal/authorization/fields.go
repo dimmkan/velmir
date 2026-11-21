@@ -25,7 +25,7 @@ func ValidatePermissionColumns(permissions Permissions, catalog introspection.Ca
 				if !ok {
 					return fmt.Errorf("field allowlist column %s is not present in target metadata", name)
 				}
-				if !column.Editable || column.Generated || column.Identity != "" || column.PrimaryKey {
+				if fieldPermission.Action != Read && (!column.Editable || column.Generated || column.Identity != "" || column.PrimaryKey) {
 					return fmt.Errorf("field allowlist column %s is not writable", name)
 				}
 			}

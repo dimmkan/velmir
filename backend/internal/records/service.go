@@ -63,6 +63,9 @@ func (s *Service) List(ctx context.Context, schemaName string, resource introspe
 
 		record := make(map[string]any, len(values))
 		for index, field := range fields {
+			if _, ok := findColumn(resource, field.Name); !ok {
+				continue
+			}
 			value := values[index]
 			if rawJSON, ok := scanTargets[index].(*[]byte); ok {
 				if *rawJSON == nil {

@@ -164,6 +164,7 @@ func schema(inspector schemaInspector, writeEnabled bool) http.HandlerFunc {
 				applyFieldPermissions(catalog.Schemas[schemaIndex].Name, &catalog.Schemas[schemaIndex].Resources[resourceIndex], permissions, writeEnabled)
 			}
 		}
+		filterRelationFieldMetadata(&catalog)
 		catalog.WriteEnabled = writeEnabled && catalogHasRealWrite(catalog, permissions)
 		writeJSON(w, http.StatusOK, catalog)
 	}
@@ -248,11 +249,26 @@ func listRecords(inspector schemaInspector, lister recordLister) http.HandlerFun
 			}})
 			return
 		}
-		options, err := records.ParseListOptions(r.URL.Query(), resource)
+		schemaName := chi.URLParam(r, "schema")
+		canRead := func(column string) bool {
+			return readableColumn(currentPermissions(r), schemaName, resource, column)
+		}
+		err = records.RejectUnreadableQueryFields(r.URL.Query(), resource, canRead)
+		var options records.ListOptions
+		if err == nil {
+			options, err = records.ParseListOptions(r.URL.Query(), resource)
+		}
+		if err == nil {
+			options, err = records.RestrictListOptions(options, len(r.URL.Query()["search_column"]) > 0, canRead)
+		}
 		if err != nil {
 			var validationErr *records.ValidationError
 			if errors.As(err, &validationErr) {
-				writeJSON(w, http.StatusBadRequest, errorResponse{Error: apiError{
+				status := http.StatusBadRequest
+				if validationErr.Code == "FIELD_NOT_READABLE" {
+					status = http.StatusForbidden
+				}
+				writeJSON(w, status, errorResponse{Error: apiError{
 					Code:    validationErr.Code,
 					Message: validationErr.Message,
 				}})
@@ -264,6 +280,8 @@ func listRecords(inspector schemaInspector, lister recordLister) http.HandlerFun
 			}})
 			return
 		}
+		readableFields := effectiveReadableFields(resource, currentPermissions(r).EffectiveFields(chi.URLParam(r, "schema"), resource.Name, authorization.Read))
+		resource = resourceWithColumns(resource, readableFields)
 
 		result, err := lister.List(ctx, chi.URLParam(r, "schema"), resource, options)
 		if err != nil {
@@ -272,6 +290,9 @@ func listRecords(inspector schemaInspector, lister recordLister) http.HandlerFun
 				Message: "Could not read resource records",
 			}})
 			return
+		}
+		for index := range result.Records {
+			result.Records[index] = filterRecordFields(result.Records[index], readableFields)
 		}
 		writeJSON(w, http.StatusOK, result)
 	}
@@ -306,11 +327,13 @@ func createRecord(inspector schemaInspector, writer recordWriter, auditStore rec
 			writeMutationError(w, err)
 			return
 		}
+		readableFields := effectiveReadableFields(resource, currentPermissions(r).EffectiveFields(schemaName, resource.Name, authorization.Read))
+		responseRecord := filterRecordFields(record, readableFields)
 		if err := recordMutationAudit(ctx, auditStore, currentUser(r).ID, audit.Create, schemaName, resource, nil, record); err != nil {
-			writeCommittedAuditError(w, r, audit.Create, schemaName, resource.Name, record, err)
+			writeCommittedAuditError(w, r, audit.Create, schemaName, resource.Name, responseRecord, err)
 			return
 		}
-		writeJSON(w, http.StatusCreated, map[string]any{"record": record})
+		writeJSON(w, http.StatusCreated, map[string]any{"record": responseRecord})
 	}
 }
 
@@ -348,11 +371,13 @@ func updateRecord(inspector schemaInspector, writer recordWriter, auditStore rec
 			writeMutationError(w, err)
 			return
 		}
+		readableFields := effectiveReadableFields(resource, currentPermissions(r).EffectiveFields(schemaName, resource.Name, authorization.Read))
+		responseRecord := filterRecordFields(result.After, readableFields)
 		if err := recordMutationAudit(ctx, auditStore, currentUser(r).ID, audit.Update, schemaName, resource, result.Before, result.After); err != nil {
-			writeCommittedAuditError(w, r, audit.Update, schemaName, resource.Name, result.After, err)
+			writeCommittedAuditError(w, r, audit.Update, schemaName, resource.Name, responseRecord, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"record": result.After})
+		writeJSON(w, http.StatusOK, map[string]any{"record": responseRecord})
 	}
 }
 
@@ -466,6 +491,10 @@ func recordHistory(inspector schemaInspector, auditStore recordAudit) http.Handl
 			return
 		}
 		result, err := auditStore.History(ctx, chi.URLParam(r, "schema"), resource.Name, key, page, limit)
+		if err == nil {
+			readableFields := effectiveReadableFields(resource, currentPermissions(r).EffectiveFields(chi.URLParam(r, "schema"), resource.Name, authorization.Read))
+			result, err = filterHistoryFields(result, readableFields)
+		}
 		if err != nil {
 			log.Printf("audit history query failed: schema=%q resource=%q error_type=%T", chi.URLParam(r, "schema"), resource.Name, err)
 			writeJSON(w, http.StatusInternalServerError, errorResponse{Error: apiError{Code: "HISTORY_QUERY_FAILED", Message: "Could not read record history"}})

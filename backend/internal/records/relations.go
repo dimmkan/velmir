@@ -53,8 +53,10 @@ type ResolvedRelation struct {
 func PrepareRelationResolve(
 	request RelationResolveRequest,
 	current introspection.Resource,
+	currentSchema string,
 	catalog introspection.Catalog,
 	canRead func(string, string) bool,
+	canReadField func(string, string, string) bool,
 ) ([]RelationResolvePlan, error) {
 	if len(request.Relations) > MaxRelationResolveRelations {
 		return nil, validationError("INVALID_RELATION_RESOLVE", fmt.Sprintf("No more than %d relations are allowed", MaxRelationResolveRelations))
@@ -82,10 +84,27 @@ func PrepareRelationResolve(
 		if !canRead(foreignKey.ReferencedSchema, foreignKey.ReferencedTable) {
 			return nil, ErrRelationResolveForbidden
 		}
+		for _, column := range foreignKey.Columns {
+			if !canReadField(currentSchema, current.Name, column) {
+				return nil, ErrRelationResolveForbidden
+			}
+		}
 		referenced, ok := catalog.FindResource(foreignKey.ReferencedSchema, foreignKey.ReferencedTable)
 		if !ok {
 			return nil, validationError("INVALID_RELATION_RESOLVE", "Unknown or invalid relation")
 		}
+		readableColumns := make([]introspection.Column, 0, len(referenced.Columns))
+		for _, column := range referenced.Columns {
+			if canReadField(foreignKey.ReferencedSchema, foreignKey.ReferencedTable, column.Name) {
+				readableColumns = append(readableColumns, column)
+			}
+		}
+		for _, column := range foreignKey.ReferencedColumns {
+			if !canReadField(foreignKey.ReferencedSchema, foreignKey.ReferencedTable, column) {
+				return nil, ErrRelationResolveForbidden
+			}
+		}
+		referenced.Columns = readableColumns
 		plan := RelationResolvePlan{
 			Name:       input.Name,
 			Schema:     foreignKey.ReferencedSchema,

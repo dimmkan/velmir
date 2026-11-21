@@ -58,7 +58,8 @@ func rawKey(t *testing.T, value any) map[string]json.RawMessage {
 	return key
 }
 
-func allowAllRelations(string, string) bool { return true }
+func allowAllRelations(string, string) bool              { return true }
+func allowAllRelationFields(string, string, string) bool { return true }
 
 func TestPrepareRelationResolveSimpleDeduplicatesAndSkipsNull(t *testing.T) {
 	catalog, books := relationTestCatalog()
@@ -70,7 +71,7 @@ func TestPrepareRelationResolveSimpleDeduplicatesAndSkipsNull(t *testing.T) {
 			rawKey(t, map[string]any{"id": nil}),
 			{"id": json.RawMessage(" null ")},
 		},
-	}}}, books, catalog, allowAllRelations)
+	}}}, books, "public", catalog, allowAllRelations, allowAllRelationFields)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +105,7 @@ func TestPrepareRelationResolveCompositeAndExactValues(t *testing.T) {
 			rawKey(t, map[string]any{"tenant_id": "9223372036854775807", "external_id": uuid}),
 			rawKey(t, map[string]any{"tenant_id": nil, "external_id": uuid}),
 		},
-	}}}, children, catalog, allowAllRelations)
+	}}}, children, "public", catalog, allowAllRelations, allowAllRelationFields)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +128,7 @@ func TestPrepareRelationResolveCompositeAndExactValues(t *testing.T) {
 
 func TestPrepareRelationResolveEmptyKeysDoNotBuildSQLRows(t *testing.T) {
 	catalog, books := relationTestCatalog()
-	plans, err := PrepareRelationResolve(RelationResolveRequest{Relations: []RelationResolveRelation{{Name: "books_author_fk", Keys: []map[string]json.RawMessage{}}}}, books, catalog, allowAllRelations)
+	plans, err := PrepareRelationResolve(RelationResolveRequest{Relations: []RelationResolveRelation{{Name: "books_author_fk", Keys: []map[string]json.RawMessage{}}}}, books, "public", catalog, allowAllRelations, allowAllRelationFields)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +150,7 @@ func TestPrepareRelationResolveRejectsUnknownAndMalformedInput(t *testing.T) {
 		{name: "duplicate relation", input: RelationResolveRequest{Relations: []RelationResolveRelation{{Name: "books_author_fk"}, {Name: "books_author_fk"}}}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if _, err := PrepareRelationResolve(test.input, books, catalog, allowAllRelations); err == nil {
+			if _, err := PrepareRelationResolve(test.input, books, "public", catalog, allowAllRelations, allowAllRelationFields); err == nil {
 				t.Fatal("invalid request was accepted")
 			}
 		})
@@ -159,7 +160,7 @@ func TestPrepareRelationResolveRejectsUnknownAndMalformedInput(t *testing.T) {
 func TestPrepareRelationResolveLimits(t *testing.T) {
 	catalog, books := relationTestCatalog()
 	tooManyRelations := RelationResolveRequest{Relations: make([]RelationResolveRelation, MaxRelationResolveRelations+1)}
-	if _, err := PrepareRelationResolve(tooManyRelations, books, catalog, allowAllRelations); err == nil {
+	if _, err := PrepareRelationResolve(tooManyRelations, books, "public", catalog, allowAllRelations, allowAllRelationFields); err == nil {
 		t.Fatal("relation limit was not enforced")
 	}
 	keys := make([]map[string]json.RawMessage, MaxRelationResolveKeys+1)
@@ -167,7 +168,7 @@ func TestPrepareRelationResolveLimits(t *testing.T) {
 		keys[index] = rawKey(t, map[string]any{"id": index + 1})
 	}
 	tooManyKeys := RelationResolveRequest{Relations: []RelationResolveRelation{{Name: "books_author_fk", Keys: keys}}}
-	if _, err := PrepareRelationResolve(tooManyKeys, books, catalog, allowAllRelations); err == nil {
+	if _, err := PrepareRelationResolve(tooManyKeys, books, "public", catalog, allowAllRelations, allowAllRelationFields); err == nil {
 		t.Fatal("key limit was not enforced")
 	}
 
@@ -180,14 +181,14 @@ func TestPrepareRelationResolveLimits(t *testing.T) {
 		})
 		request.Relations = append(request.Relations, RelationResolveRelation{Name: name, Keys: keys[:MaxRelationResolveKeys]})
 	}
-	if _, err := PrepareRelationResolve(request, current, catalog, allowAllRelations); err == nil {
+	if _, err := PrepareRelationResolve(request, current, "public", catalog, allowAllRelations, allowAllRelationFields); err == nil {
 		t.Fatal("total key limit was not enforced")
 	}
 }
 
 func TestPrepareRelationResolveRequiresReferencedRead(t *testing.T) {
 	catalog, books := relationTestCatalog()
-	_, err := PrepareRelationResolve(RelationResolveRequest{Relations: []RelationResolveRelation{{Name: "books_author_fk"}}}, books, catalog, func(string, string) bool { return false })
+	_, err := PrepareRelationResolve(RelationResolveRequest{Relations: []RelationResolveRelation{{Name: "books_author_fk"}}}, books, "public", catalog, func(string, string) bool { return false }, allowAllRelationFields)
 	if err != ErrRelationResolveForbidden {
 		t.Fatalf("error = %v, want ErrRelationResolveForbidden", err)
 	}

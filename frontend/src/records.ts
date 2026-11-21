@@ -1,5 +1,5 @@
 import { handleUnauthorized } from './auth'
-import type { ColumnMetadata, ResourceMetadata } from './schema'
+import { readableColumns, type ColumnMetadata, type ResourceMetadata } from './schema'
 
 export const DEFAULT_RECORDS_LIMIT = 50
 export const MAX_RECORDS_LIMIT = 100
@@ -76,12 +76,13 @@ export function parseRecordsQuery(search: string, resource: ResourceMetadata): R
   if (Number.isInteger(limit) && limit >= 1 && limit <= MAX_RECORDS_LIMIT) state.limit = limit
 
   const sort = query.get('sort') ?? ''
-  const column = resource.columns.find((item) => item.name === sort)
+  const columns = readableColumns(resource)
+  const column = columns.find((item) => item.name === sort)
   if (column && isSortableColumn(column)) state.sort = sort
   if (query.get('direction') === 'desc') state.direction = 'desc'
 
   state.search = query.get('search') ?? ''
-  const searchable = new Set(resource.columns.filter(isTextColumn).map((item) => item.name))
+  const searchable = new Set(readableColumns(resource).filter(isTextColumn).map((item) => item.name))
   state.searchColumns = [...new Set(query.getAll('search_column').filter((name) => searchable.has(name)))]
   state.filters = parseFilters(query.get('filter'), resource)
   return state
@@ -193,7 +194,7 @@ function parseFilters(raw: string | null, resource: ResourceMetadata): RecordFil
     if (!Array.isArray(value)) return []
     return value.filter((filter): filter is RecordFilter => {
       if (!isRecord(filter) || typeof filter.column !== 'string' || typeof filter.operator !== 'string') return false
-      const column = resource.columns.find((item) => item.name === filter.column)
+      const column = readableColumns(resource).find((item) => item.name === filter.column)
       if (!column || !filterOperators(column.data_type).includes(filter.operator as FilterOperator)) return false
       if (filter.operator === 'is_null') return typeof filter.value === 'boolean'
       return typeof filter.value === 'string'

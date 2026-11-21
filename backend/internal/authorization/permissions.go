@@ -117,7 +117,7 @@ func effectivePermissions(grants []Grant, fieldGrants []FieldGrant, includeField
 			}
 		}
 		if includeFields && key[0] != "*" && key[1] != "*" {
-			for _, operation := range []Operation{Create, Update} {
+			for _, operation := range []Operation{Read, Create, Update} {
 				if _, ok := operations[key][operation]; !ok {
 					continue
 				}
@@ -179,7 +179,7 @@ func exactFieldAccess(grants []Grant, fieldGrants []FieldGrant, schema, resource
 
 func (permissions Permissions) EffectiveFields(schema, resource string, operation Operation) FieldAccess {
 	access := FieldAccess{}
-	if operation != Create && operation != Update {
+	if operation != Read && operation != Create && operation != Update {
 		return access
 	}
 	columns := make(map[string]struct{})
@@ -268,7 +268,7 @@ func NormalizePermissions(permissions Permissions) Permissions {
 			})
 		}
 		if permission.Schema != "*" && permission.Resource != "*" {
-			for _, operation := range []Operation{Create, Update} {
+			for _, operation := range []Operation{Read, Create, Update} {
 				if !hasOperation(permission, operation) || hasFieldPermission(permission, operation) {
 					continue
 				}
@@ -320,13 +320,13 @@ func ValidatePermissions(permissions Permissions) error {
 		if schemaName == "*" && len(permission.FieldPermissions) > 0 {
 			return errors.New("wildcard permissions are always unrestricted and cannot have field restrictions")
 		}
-		if len(permission.FieldPermissions) > 2 {
-			return errors.New("field permissions support only create and update actions")
+		if len(permission.FieldPermissions) > 3 {
+			return errors.New("field permissions support only read, create and update actions")
 		}
 		fieldActions := make(map[Operation]struct{}, len(permission.FieldPermissions))
 		for _, fieldPermission := range permission.FieldPermissions {
-			if fieldPermission.Action != Create && fieldPermission.Action != Update {
-				return errors.New("field permissions support only create and update actions")
+			if fieldPermission.Action != Read && fieldPermission.Action != Create && fieldPermission.Action != Update {
+				return errors.New("field permissions support only read, create and update actions")
 			}
 			if _, ok := seen[fieldPermission.Action]; !ok {
 				return errors.New("a field permission requires the corresponding resource operation")

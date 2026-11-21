@@ -361,3 +361,54 @@ func escapeLike(value string) string {
 	replacer := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 	return replacer.Replace(value)
 }
+
+func RejectUnreadableQueryFields(query url.Values, resource introspection.Resource, canRead func(string) bool) error {
+	for _, key := range []string{"sort", "search_column"} {
+		for _, name := range query[key] {
+			if _, known := findColumn(resource, name); known && !canRead(name) {
+				return validationError("FIELD_NOT_READABLE", "A query field is not readable")
+			}
+		}
+	}
+	var filters []struct {
+		Column string `json:"column"`
+	}
+	if raw := query.Get("filter"); raw != "" && json.Unmarshal([]byte(raw), &filters) == nil {
+		for _, filter := range filters {
+			if _, known := findColumn(resource, filter.Column); known && !canRead(filter.Column) {
+				return validationError("FIELD_NOT_READABLE", "A filter field is not readable")
+			}
+		}
+	}
+	return nil
+}
+
+func RestrictListOptions(options ListOptions, explicitSearchColumns bool, canRead func(string) bool) (ListOptions, error) {
+	if options.Sort != "" && !canRead(options.Sort) {
+		return ListOptions{}, validationError("FIELD_NOT_READABLE", "The sort field is not readable")
+	}
+	for _, filter := range options.Filters {
+		if !canRead(filter.Column) {
+			return ListOptions{}, validationError("FIELD_NOT_READABLE", "A filter field is not readable")
+		}
+	}
+	if explicitSearchColumns {
+		for _, column := range options.SearchColumns {
+			if !canRead(column) {
+				return ListOptions{}, validationError("FIELD_NOT_READABLE", "A search field is not readable")
+			}
+		}
+	} else if options.Search != "" {
+		readable := make([]string, 0, len(options.SearchColumns))
+		for _, column := range options.SearchColumns {
+			if canRead(column) {
+				readable = append(readable, column)
+			}
+		}
+		options.SearchColumns = readable
+		if len(readable) == 0 {
+			return ListOptions{}, validationError("INVALID_SEARCH", "resource has no readable searchable text columns")
+		}
+	}
+	return options, nil
+}

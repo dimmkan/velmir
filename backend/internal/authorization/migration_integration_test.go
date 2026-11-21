@@ -41,19 +41,21 @@ func TestFieldPermissionMigrationBackfillsUnrestrictedAndIsIdempotent(t *testing
 	if err := tx.QueryRow(ctx, "INSERT INTO roles (name, description) VALUES ($1, '') RETURNING id", roleName).Scan(&roleID); err != nil {
 		t.Fatal(err)
 	}
-	for _, action := range []string{"create", "update"} {
+	for _, action := range []string{"read", "create", "update"} {
 		if _, err := tx.Exec(ctx, "INSERT INTO role_permissions (role_id, schema_name, resource_name, permission) VALUES ($1, 'public', 'books', $2)", roleID, action); err != nil {
 			t.Fatal(err)
 		}
 	}
-	migration, err := os.ReadFile("../../migrations/00008_field_permissions.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	up := strings.Split(string(migration), "-- +goose Down")[0]
-	for attempt := 0; attempt < 2; attempt++ {
-		if _, err := tx.Exec(ctx, up); err != nil {
-			t.Fatalf("apply field permission migration attempt %d: %v", attempt+1, err)
+	for _, migrationName := range []string{"00008_field_permissions.sql", "00009_read_field_permissions.sql"} {
+		migration, err := os.ReadFile("../../migrations/" + migrationName)
+		if err != nil {
+			t.Fatal(err)
+		}
+		up := strings.Split(string(migration), "-- +goose Down")[0]
+		for attempt := 0; attempt < 2; attempt++ {
+			if _, err := tx.Exec(ctx, up); err != nil {
+				t.Fatalf("apply %s attempt %d: %v", migrationName, attempt+1, err)
+			}
 		}
 	}
 	rows, err := tx.Query(ctx, "SELECT action, mode, columns FROM role_field_permissions WHERE role_id = $1 ORDER BY action", roleID)
@@ -76,14 +78,14 @@ func TestFieldPermissionMigrationBackfillsUnrestrictedAndIsIdempotent(t *testing
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	if count != 2 {
-		t.Fatalf("backfilled field rows = %d, want 2", count)
+	if count != 3 {
+		t.Fatalf("backfilled field rows = %d, want 3", count)
 	}
 	var grants int
 	if err := tx.QueryRow(ctx, "SELECT count(*) FROM role_permissions WHERE role_id = $1", roleID).Scan(&grants); err != nil {
 		t.Fatal(err)
 	}
-	if grants != 2 {
+	if grants != 3 {
 		t.Fatalf("existing resource grants changed: %d", grants)
 	}
 }

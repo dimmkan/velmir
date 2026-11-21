@@ -98,7 +98,7 @@
 
 ### Field permissions в конфигурации роли
 
-Для concrete schema/resource permission может дополнительно содержать `field_permissions` для `create` и `update`:
+Для concrete schema/resource permission может дополнительно содержать `field_permissions` для `read`, `create` и `update`:
 
 ```json
 {
@@ -106,17 +106,18 @@
   "resource": "books",
   "operations": ["read", "create", "update"],
   "field_permissions": [
+    {"action": "read", "mode": "allowlist", "columns": ["title"]},
     {"action": "create", "mode": "unrestricted", "columns": []},
     {"action": "update", "mode": "allowlist", "columns": ["title", "published_on"]}
   ]
 }
 ```
 
-`unrestricted` разрешает все поля, которые иначе доступны действию по metadata. `allowlist` разрешает только явный массив `columns`; `"columns":[]` — самостоятельный режим, при котором ни одно поле не доступно для записи. Отсутствие field configuration в legacy payload означает `unrestricted`; миграция также backfill-ит существующие concrete create/update grants как unrestricted, поэтому прежние возможности ролей сохраняются. В ответах admin/effective permissions concrete create/update grants содержат явную конфигурацию.
+`unrestricted` разрешает все поля, которые иначе доступны действию по metadata. Для `read` `allowlist` разрешает только явный массив `columns`, но **при resource-level read все PK columns всегда readable**, даже если не перечислены. Поэтому `"columns":[]` для read означает «только primary key», а для create/update — ни одного writable field. Отсутствие field configuration в legacy payload означает `unrestricted`; миграции backfill-ят существующие concrete read/create/update grants как unrestricted, поэтому прежние возможности ролей сохраняются. В ответах admin/effective permissions concrete grants содержат явную конфигурацию.
 
-Права ролей объединяются по resource/action: один unrestricted даёт effective unrestricted, иначе effective fields — объединение allowlists. Empty allowlist добавляет ноль полей и не отменяет другие роли. Wildcard `*.*` всегда unrestricted, не принимает `field_permissions` и не может быть сужен другой ролью. Системная `admin` unrestricted, `viewer` не получает create/update, системные роли неизменяемы.
+Права ролей объединяются по resource/action: один unrestricted даёт effective unrestricted, иначе effective fields — объединение allowlists. Empty allowlist добавляет ноль обычных полей и не отменяет другие роли. Wildcard `*.*` всегда unrestricted, не принимает `field_permissions` и не может быть сужен другой ролью. Системная `admin` unrestricted, `viewer` сохраняет unrestricted resource read без create/update, системные роли неизменяемы.
 
-API проверяет существование роли, действия create/update, concrete schema/resource, mode, размер и структуру allowlist (до 1000 колонок), duplicates и имена колонок по свежим target metadata. Generated, identity, read-only и PK columns нельзя выбрать как writable. Изменения сохраняются только в admin database `role_field_permissions` в той же транзакции, что и замена resource permissions. DDL/GRANT в target не выполняются; admin session и CSRF обязательны как и прежде.
+API проверяет существование роли, действия read/create/update, concrete schema/resource, mode, размер и структуру allowlist (до 1000 колонок), duplicates и имена колонок по свежим target metadata. Generated, identity, read-only и PK columns можно выбрать для read, но нельзя выбрать как writable. PermissionEditor всегда показывает PK выбранными и заблокированными от снятия для read. Изменения сохраняются только в admin database `role_field_permissions` в той же транзакции, что и замена resource permissions и применяются к следующим запросам без restart. DDL/GRANT в target не выполняются; admin session и CSRF обязательны как и прежде.
 
 ## GET /api/schema
 
@@ -148,6 +149,8 @@ API проверяет существование роли, действия cre
             }
           ],
           "primary_key": ["id"],
+          "readable_fields": ["id", "title"],
+          "write_only_fields": ["owner_id"],
           "creatable_fields": ["title", "owner_id"],
           "updatable_fields": ["title"],
           "can_create": true,
@@ -170,7 +173,9 @@ API проверяет существование роли, действия cre
 
 `kind` принимает значение `table` или `view`. `default` равен `null`, если значение по умолчанию отсутствует. `primary_key` отмечает ключевой столбец. `identity` — пустая строка, `always` или `by_default`; `generated` отмечает сгенерированные столбцы. `editable` истинен только для поддерживаемых несгенерированных столбцов таблицы (`always` identity не редактируется). `enum_values` содержит допустимые метки enum-типов и пуст в остальных случаях. Составные первичные и внешние ключи сохраняют порядок столбцов. Пустые коллекции возвращаются как массивы.
 
-`creatable_fields` и `updatable_fields` — effective field permissions, вычисленные backend из свежих metadata и объединения ролей; frontend не выполняет union самостоятельно. Без соответствующего action permission массив пуст. Unrestricted включает все поля, иначе допустимые действию (для update PK исключаются); allowlist пересекается с этим базовым набором. Empty allowlist возвращает пустой массив и никогда не отображается как unrestricted.
+`readable_fields`, `creatable_fields` и `updatable_fields` — effective field permissions, вычисленные backend из свежих metadata и объединения ролей; frontend не выполняет union самостоятельно. Без соответствующего action permission массив пуст. Read unrestricted включает все поля; allowlist дополнительно всегда включает все PK columns. Create/update unrestricted включает все иначе допустимые поля (для update PK исключаются); allowlist пересекается с этим базовым набором. Empty read allowlist возвращает только PK, empty write allowlist — пустой массив, и никогда не отображается как unrestricted.
+
+`columns` содержит только readable fields и `write_only_fields` — поля из effective create/update, недоступные для read. Поэтому RecordsTable получает лишь readable metadata, а форма может показать write-only control без текущего значения. Write-only current value имеет localized hidden state, не представляется как фактический null/empty и не отправляется в неизменённом PATCH. Скрытые поля отсутствуют в labels, filter/search/sort controls и history UI.
 
 `can_create`/`can_update` учитывают configured mutation pool, action permission и структурную возможность записи. `create_disabled_reason="required_field_unavailable"` означает, что NOT NULL поле без default/generated/identity недоступно и create невозможен. `update_disabled_reason="no_writable_fields"` означает пустой effective update set. При empty create allowlist create всё ещё возможен, если PostgreSQL может создать запись только из default/generated/identity/NULL values. Эти flags не меняют read visibility колонок, resources, history или related labels.
 
@@ -195,16 +200,16 @@ API проверяет существование роли, действия cre
 
 Возвращает одну страницу записей таблицы или представления. `schema` и `resource` должны точно совпадать с метаданными из `GET /api/schema`; поддерживается URL-кодирование пути. Каждый запрос использует свежие метаданные интроспекции. Неизвестные схемы, ресурсы и столбцы отклоняются до выполнения SQL.
 
-Endpoint доступен только для чтения и требует `read` для указанного ресурса; иначе возвращается HTTP 403 `FORBIDDEN` до introspection. Динамические идентификаторы экранируются после проверки по метаданным, а все значения поиска и фильтров передаются как параметры запроса PostgreSQL. SQL-выражения в `sort`, `direction`, `search`, `search_column` и `filter` не поддерживаются.
+Endpoint доступен только для чтения и требует `read` для указанного ресурса; иначе возвращается HTTP 403 `FORBIDDEN` до introspection. SELECT содержит только effective readable columns, включая всегда доступные PK; hidden fields полностью отсутствуют в JSON, а не возвращаются как null. Динамические идентификаторы экранируются после проверки по метаданным, а все значения поиска и фильтров передаются как параметры запроса PostgreSQL. SQL-выражения в `sort`, `direction`, `search`, `search_column` и `filter` не поддерживаются.
 
 ### Параметры запроса
 
 - `page`: положительное целое число, по умолчанию `1`.
 - `limit`: целое число от `1` до `100`, по умолчанию `50`.
-- `sort`: одно разрешённое имя столбца. Выражения и сортировка по нескольким столбцам через запятую не принимаются.
+- `sort`: одно разрешённое readable имя столбца. Выражения и сортировка по нескольким столбцам через запятую не принимаются.
 - `direction`: `asc` или `desc`, по умолчанию `asc`. Дополнительные ключи сортировки по первичному ключу используют то же направление.
 - `search`: буквальная подстрока без учёта регистра, поиск выполняется через `ILIKE`. Символы `%`, `_` и `\` экранируются и не имеют смысла wildcards.
-- `search_column`: повторяемое имя текстового столбца. По умолчанию `search` охватывает все поддерживаемые текстовые столбцы ресурса. Нетекстовые и неизвестные столбцы отклоняются.
+- `search_column`: повторяемое имя readable текстового столбца. По умолчанию `search` охватывает только readable поддерживаемые текстовые столбцы ресурса. Нетекстовые и неизвестные столбцы отклоняются.
 - `filter`: URL-кодированный JSON-массив не более чем с 20 объектами. Кодированное значение не должно превышать 64 КиБ. Каждый объект содержит `column`, `operator` и `value`:
 
 ```json
@@ -279,6 +284,7 @@ HTTP 200:
 Ошибки используют ту же обёртку `error.code` и `error.message`, что и интроспекция схемы:
 
 - HTTP 400: `INVALID_PAGE`, `INVALID_LIMIT`, `INVALID_SORT`, `INVALID_DIRECTION`, `INVALID_SEARCH`, `INVALID_FILTER` или `INVALID_QUERY`.
+- HTTP 403: `FIELD_NOT_READABLE`, если hidden field используется в sort, явном search_column или filter, включая relation filters. Такой запрос отклоняется до SQL и не превращается в пустой результат. Unknown field validation сохраняется; readable PK tie-breakers разрешены.
 - HTTP 404: `RESOURCE_NOT_FOUND`, если схема или ресурс отсутствуют в метаданных интроспекции.
 - HTTP 503: `TARGET_NOT_CONFIGURED`.
 - HTTP 500: `SCHEMA_INTROSPECTION_FAILED` или `RECORDS_QUERY_FAILED`.
@@ -321,7 +327,7 @@ Read-only batch endpoint для related labels в списке записей. �
 }
 ```
 
-Для каждой relation выполняется один parameterized SELECT через read-only target pool, независимо от числа ключей. Schema, resource, relation и columns проверяются по свежему metadata allowlist; identifiers quoting, произвольный SQL не принимается. Выбираются только referenced key, PK и текстовые поля, необходимые общему display label helper. Формат значений совпадает с records API, включая точные bigint/numeric, UUID, JSON/JSONB и Base64 bytea для выбранных ключевых полей. Ошибка запроса возвращает HTTP 500 `RELATION_RESOLVE_FAILED` без SQL или stack traces.
+Для каждой relation выполняется один parameterized SELECT через read-only target pool, независимо от числа ключей. Schema, resource, relation и columns проверяются по свежему metadata allowlist; identifiers quoting, произвольный SQL не принимается. Все local FK columns и referenced key columns должны быть readable, иначе resolve возвращает 403 до SQL. Выбираются только readable referenced key, PK и readable текстовые поля, необходимые общему display label helper. Hidden label/key fields не возвращаются, fallback — readable PK. Arbitrary keys не обходят local FK checks. Формат значений совпадает с records API, включая точные bigint/numeric, UUID, JSON/JSONB и Base64 bytea для выбранных ключевых полей. Ошибка запроса возвращает HTTP 500 `RELATION_RESOLVE_FAILED` без SQL или stack traces.
 
 ## Many-to-one selectors в формах записей
 
@@ -339,7 +345,7 @@ Referenced records запрашиваются только при наличии
 
 В `RecordsTable` many-to-one FK cells используют тот же общий display label helper, что и selectors. Один batch resolve на группу relations заменяет per-row/per-key HTTP-запросы; повторяющиеся FK values дедуплицируются. Рядом или в accessible tooltip остаются все referenced key parts, поэтому одинаковые labels различаются по ключу. NULL показывается локализованным empty relation, длинные labels обрезаются визуально с полным `title`. При ошибке resolution основной список и raw FK values остаются доступными. Без `read` на referenced resource frontend не отправляет related requests и не получает labels/metadata через schema.
 
-На parent record form/detail `reverse_relations` порождают generic read-only child panels. Detail доступен по `read` даже без `update`; в нём нет editable или save controls. Каждая панель использует существующий records list endpoint с typed `eq` filters по всем child local columns, включая каждую часть composite relation. Если тип parent key не поддерживает существующий `eq` filter, такая reverse panel на этом этапе скрывается и запрос не выполняется. Отдельная pagination использует тот же `page`/`limit`/`has_next` contract. Child key и основные поля форматируются существующими safe helpers; loading, empty, 401, 403 и error states изолированы внутри конкретной панели и не затрагивают parent form или другие панели. Для несохранённой parent record показывается **Save the record first**, child query без полного parent key не выполняется. Переключение ru/en не меняет pagination и значения формы.
+На parent record form/detail `reverse_relations` порождают generic read-only child panels. Detail доступен по `read` даже без `update`; в нём нет editable или save controls. Parent referenced keys и все child FK columns должны быть readable, иначе panel скрывается без related request. Child SELECT содержит только effective readable fields. Каждая панель использует существующий records list endpoint с typed `eq` filters по всем child local columns, включая каждую часть composite relation. Если тип parent key не поддерживает существующий `eq` filter, такая reverse panel на этом этапе скрывается и запрос не выполняется. Отдельная pagination использует тот же `page`/`limit`/`has_next` contract. Child key и основные поля форматируются существующими safe helpers; loading, empty, 401, 403 и error states изолированы внутри конкретной панели и не затрагивают parent form или другие панели. Для несохранённой parent record показывается **Save the record first**, child query без полного parent key не выполняется. Переключение ru/en не меняет pagination и значения формы.
 
 Матрица прав: `read` только на parent открывает parent и скрывает child panels/related labels; `read` на parent и child разрешает child records и labels; `read` только на referenced resource не открывает current relation resolve. Backend независимо проверяет те же права для schema, resolve и records list. Все операции используют read pool, audit events не создаются. В one-to-many panels нет create/edit/delete controls и nested record forms. Nested mutations и создание дочерних записей из parent form не реализованы.
 
@@ -347,7 +353,7 @@ Referenced records запрашиваются только при наличии
 
 Frontend generic-образом определяет many-to-many relations только по RBAC-filtered metadata `/api/schema`, без имён конкретных ресурсов и без новых metadata или mutation endpoints. Junction table поддерживается, если это таблица ровно с двумя many-to-one FK к двум разным parent/target resources, её composite PK состоит ровно из всех колонок обоих FK в любом порядке, а каждая дополнительная колонка nullable либо имеет default/generated/identity value. Все FK columns должны поддерживать обычный POST, referenced key columns — существующий `eq` filter. Self-referential many-to-many, отдельный surrogate PK, три и более FK и дополнительные обязательные attribute fields без default/generated не поддерживаются: такие ресурсы и их reverse panels остаются доступны обычным образом, но editor для них не показывается.
 
-Для панели необходимы `read` на parent, target и junction. Недоступные ресурсы не раскрываются и related requests не выполняются. Панель запрашивает страницу junction records через `GET /api/resources/{schema}/{junction}/records` с typed `eq` filters по всем parent FK columns и получает target labels одним batch `POST /api/resources/{schema}/{junction}/relations/resolve` на страницу, а не запросом на строку. Поддерживаются simple/composite parent, target и junction keys, точные bigint/numeric строки, UUID и независимая pagination. Поддерживаемая junction reverse panel не дублируется вместе с many-to-many panel.
+Для панели необходимы `read` на parent, target и junction, а также readable junction FK columns и referenced keys. Недоступные ресурсы/поля не раскрываются и related requests не выполняются. Target labels используют только readable target fields, junction responses не содержат hidden columns, а write-only junction FK скрывает editor, если безопасный mapping невозможен. Add/remove сохраняют независимые 8A create/delete permissions и не изменяют parent/target records. Панель запрашивает страницу junction records через `GET /api/resources/{schema}/{junction}/records` с typed `eq` filters по всем parent FK columns и получает target labels одним batch `POST /api/resources/{schema}/{junction}/relations/resolve` на страницу, а не запросом на строку. Поддерживаются simple/composite parent, target и junction keys, точные bigint/numeric строки, UUID и независимая pagination. Поддерживаемая junction reverse panel не дублируется вместе с many-to-many panel.
 
 Для **Add relation** дополнительно нужны настроенный writer, `create` на junction, все необходимые junction FK columns в effective `creatable_fields` и `read` на target для selector. При empty allowlist или отсутствии хотя бы одной FK column Add relation скрывается; read-only связи и независимый delete behavior не меняются. Используется обычный `POST /api/resources/{schema}/{junction}/records` с flat `values`, содержащими только колонки двух FK; parent/target records не изменяются. Selector использует существующий records list с server-side search, debounce и Load more, без создания target records. `UNIQUE_VIOLATION` означает duplicate relation; failed POST не создаёт audit event и не повторяется автоматически.
 
@@ -380,7 +386,7 @@ Create/delete связей аудируются как обычные `create`/`
 
 Значения `bigint`, `numeric` и `decimal` следует передавать как JSON-строки для сохранения точности. Целые значения могут быть JSON numbers или strings. Даты, timestamps и UUID используют те же форматы, что и фильтры записей. JSON и JSONB принимают любое допустимое JSON-значение. Значения enum должны соответствовать `enum_values`. Неподдерживаемые типы PostgreSQL, generated-столбцы и `always` identity не могут быть переданы.
 
-Успешный ответ — HTTP 201. PostgreSQL `RETURNING` возвращает полную сохранённую запись в том же безопасном JSON-представлении, что и endpoint списка:
+Успешный ответ — HTTP 201. Ответ содержит только effective readable fields сохранённой записи в том же безопасном JSON-представлении, что и endpoint списка. Write-only input, defaults и generated values скрытых полей не возвращаются; PK возвращается по общему правилу. Внутренний audit по-прежнему может сохранить фактические полные before/after для последующей авторизованной фильтрации:
 
 ```json
 {
@@ -393,7 +399,7 @@ Create/delete связей аудируются как обычные `create`/`
 
 ## PATCH /api/resources/{schema}/{resource}/records/{key}
 
-Обновляет только переданные редактируемые поля, не входящие в первичный ключ, и возвращает полную обновлённую запись с HTTP 200. Требуются право `update` и действительный CSRF token; без права возвращается HTTP 403 `FORBIDDEN`. Представления и таблицы без первичного ключа доступны только для чтения. Обновление первичных ключей не поддерживается.
+Обновляет только переданные редактируемые поля, не входящие в первичный ключ, и возвращает HTTP 200 с записью, отфильтрованной до effective readable fields; write-only значения в response не раскрываются. Требуются право `update` и действительный CSRF token; без права возвращается HTTP 403 `FORBIDDEN`. Представления и таблицы без первичного ключа доступны только для чтения. Обновление первичных ключей не поддерживается.
 
 Все переданные поля должны входить в effective `updatable_fields`. Запрещённое поле возвращает HTTP 403 `FIELD_FORBIDDEN` и отклоняет весь PATCH: разрешённые поля смешанного запроса не изменяются, UPDATE и audit не выполняются. Empty effective set возвращает `NO_WRITABLE_FIELDS`. PK/generated/read-only/unknown columns сохраняют прежнюю metadata validation и не обходятся через field permissions.
 
@@ -478,7 +484,9 @@ Check constraint требует after для create, before/after для update 
 
 Поля, по имени содержащие пароли, session/CSRF tokens, password hashes, secrets или connection strings, исключаются из audit, включая вложенные JSON-объекты. Ошибки логируются только с типом ошибки и без connection strings, значений записей и секретов. Bigint/numeric используют строки records API, bytea — Base64, а JSON/JSONB обрабатывается как `json.RawMessage`/`json.Number` без преобразования через JavaScript number.
 
-История охватывает только успешные изменения, выполненные через Velmir после внедрения этой функции. Она **не гарантирует фиксацию внешних изменений**, сделанных напрямую в target database. Login/logout, чтение и администрирование пользователей не записываются в audit. Forbidden field mutations не аудируются; успешные create/update сохраняют прежние actor, record key и before/after, а `AUDIT_WRITE_FAILED` сохраняет `mutation_committed=true` без automatic retry. Field-level read filtering не добавляется: history использует resource-level `read`. Для таблицы без первичного ключа create может сохранить событие с пустым ключом, но history конкретной записи недоступна.
+История охватывает только успешные изменения, выполненные через Velmir после внедрения этой функции. Она **не гарантирует фиксацию внешних изменений**, сделанных напрямую в target database. Login/logout, чтение и администрирование пользователей не записываются в audit. Forbidden field mutations не аудируются; успешные create/update сохраняют прежние actor, record key и before/after, а `AUDIT_WRITE_FAILED` сохраняет `mutation_committed=true` без automatic retry.
+
+History API фильтрует top-level before/after по effective read fields **текущего запрашивающего пользователя**, включая старые события и union ролей. Hidden/write-only values полностью отсутствуют, а не заменяются null; PK остаются по общему правилу. Unrestricted admin видит полную историю, empty allowlist — actor/action/timestamp/resource metadata и PK. Pagination и порядок не меняются. Фильтрация выполняется только в ответе: сохранённые audit records не изменяются и filtered copy не записывается в admin DB. Для таблицы без первичного ключа create может сохранить событие с пустым ключом, но history конкретной записи недоступна.
 
 ## GET /api/resources/{schema}/{resource}/records/{key}/history
 

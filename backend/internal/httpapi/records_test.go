@@ -30,6 +30,7 @@ func recordsCatalog() introspection.Catalog {
 			Columns: []introspection.Column{
 				{Name: "id", DataType: "bigint", PrimaryKey: true, Default: &idDefault},
 				{Name: "name", DataType: "text", Editable: true},
+				{Name: "big", DataType: "bigint", Nullable: true},
 			},
 			ForeignKeys: []introspection.ForeignKey{},
 		}},

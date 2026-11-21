@@ -116,7 +116,7 @@ export function validateRoleForm(form: RoleForm): FormErrors {
     }
     const fields = permission.field_permissions ?? []
     const fieldActions = fields.map((field) => field.action)
-    if ((schema === '*' && fields.length > 0) || fields.length > 2 || new Set(fieldActions).size !== fieldActions.length ||
+    if ((schema === '*' && fields.length > 0) || fields.length > 3 || new Set(fieldActions).size !== fieldActions.length ||
       fields.some((field) => !permission.operations.includes(field.action) ||
         (field.mode === 'unrestricted' && field.columns.length > 0) ||
         (field.mode === 'allowlist' && (field.columns.length > 1000 || new Set(field.columns).size !== field.columns.length ||

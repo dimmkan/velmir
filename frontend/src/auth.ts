@@ -9,7 +9,7 @@ export interface AuthUser {
 
 export type PermissionOperation = 'read' | 'create' | 'update' | 'delete'
 
-export type FieldPermissionAction = 'create' | 'update'
+export type FieldPermissionAction = 'read' | 'create' | 'update'
 export type FieldPermissionMode = 'unrestricted' | 'allowlist'
 
 export interface FieldPermission {
@@ -236,7 +236,7 @@ function isResourcePermission(value: unknown): value is ResourcePermission {
   if (value.field_permissions === undefined) return true
   return Array.isArray(value.field_permissions) && value.field_permissions.every((fieldPermission) =>
     isRecord(fieldPermission) &&
-    (fieldPermission.action === 'create' || fieldPermission.action === 'update') &&
+    (fieldPermission.action === 'read' || fieldPermission.action === 'create' || fieldPermission.action === 'update') &&
     (fieldPermission.mode === 'unrestricted' || fieldPermission.mode === 'allowlist') &&
     Array.isArray(fieldPermission.columns) &&
     fieldPermission.columns.every((column) => typeof column === 'string'),

@@ -13,7 +13,7 @@ const emit = defineEmits<{
   change: [permissions: ResourcePermission[]]
 }>()
 const { t } = useI18n()
-const fieldActions: FieldPermissionAction[] = ['create', 'update']
+const fieldActions: FieldPermissionAction[] = ['read', 'create', 'update']
 
 function normalizePermission(permission: ResourcePermission): ResourcePermission {
   if (permission.schema === '*' && permission.resource === '*') {
@@ -59,6 +59,7 @@ function toggleField(index: number, action: FieldPermissionAction, column: strin
   const permission = props.permissions[index]
   const current = fieldPermission(permission, action)
   if (current.mode !== 'allowlist') return
+  if (action === 'read' && resourceMetadata(permission)?.columns.find((item) => item.name === column)?.primary_key) return
   const selected = new Set(current.columns)
   if (selected.has(column)) selected.delete(column)
   else selected.add(column)
@@ -68,7 +69,7 @@ function toggleField(index: number, action: FieldPermissionAction, column: strin
       {
         action,
         mode: 'allowlist',
-        columns: writableColumns(permission, action).map((item) => item.name).filter((name) => selected.has(name)),
+        columns: selectableColumns(permission, action).map((item) => item.name).filter((name) => selected.has(name)),
       },
     ],
   })
@@ -82,10 +83,18 @@ function resourceMetadata(permission: ResourcePermission): ResourceMetadata | un
   return undefined
 }
 
-function writableColumns(permission: ResourcePermission, _action: FieldPermissionAction) {
-  return resourceMetadata(permission)?.columns.filter((column) =>
+function selectableColumns(permission: ResourcePermission, action: FieldPermissionAction) {
+  const columns = resourceMetadata(permission)?.columns ?? []
+  if (action === 'read') return columns
+  return columns.filter((column) =>
     column.editable && !column.generated && column.identity === '' && !column.primary_key,
-  ) ?? []
+  )
+}
+
+function primaryKeyOnly(permission: ResourcePermission) {
+  return fieldPermission(permission, 'read').columns.every((name) =>
+    resourceMetadata(permission)?.columns.find((column) => column.name === name)?.primary_key,
+  )
 }
 
 function addPermission() {
@@ -162,24 +171,24 @@ function removePermission(index: number) {
           <template v-if="fieldPermission(permission, action).mode === 'allowlist'">
             <p v-if="!resourceMetadata(permission)" class="field-error">{{ t('permissions.resourceMetadataUnavailable') }}</p>
             <div v-else class="field-permission-columns">
-              <label v-for="column in writableColumns(permission, action)" :key="column.name">
+              <label v-for="column in selectableColumns(permission, action)" :key="column.name">
                 <input
                   type="checkbox"
-                  :checked="fieldPermission(permission, action).columns.includes(column.name)"
-                  :disabled="disabled"
+                  :checked="action === 'read' && column.primary_key || fieldPermission(permission, action).columns.includes(column.name)"
+                  :disabled="disabled || action === 'read' && column.primary_key"
                   @change="toggleField(index, action, column.name)"
                 />
-                {{ column.name }}
+                {{ column.name }} <span v-if="action === 'read' && column.primary_key">{{ t('permissions.primaryKeyAlwaysReadable') }}</span>
               </label>
             </div>
-            <p v-if="resourceMetadata(permission) && writableColumns(permission, action).length === 0" class="field-error">
-              {{ t('permissions.noSelectableFields') }}
+            <p v-if="resourceMetadata(permission) && selectableColumns(permission, action).length === 0" class="field-error">
+              {{ t(action === 'read' ? 'permissions.noReadableFields' : 'permissions.noSelectableFields') }}
             </p>
             <p
-              v-if="fieldPermission(permission, action).columns.length === 0"
+              v-if="action === 'read' ? primaryKeyOnly(permission) : fieldPermission(permission, action).columns.length === 0"
               class="empty-allowlist-warning"
               role="alert"
-            >{{ t('permissions.emptyAllowlistWarning') }}</p>
+            >{{ t(action === 'read' ? 'permissions.primaryKeyOnly' : 'permissions.emptyAllowlistWarning') }}</p>
           </template>
         </fieldset>
       </template>
