@@ -18,6 +18,7 @@ const props = defineProps<{
   schemaName: string
   resource: ResourceMetadata
   recordKey: string
+  embedded?: boolean
 }>()
 const emit = defineEmits<{ close: [] }>()
 const { t, locale } = useI18n()
@@ -110,7 +111,7 @@ onBeforeUnmount(() => {
 
 <template>
   <section class="history-panel" :aria-label="t('history.title')" :aria-busy="loading">
-    <div class="history-heading">
+    <div v-if="!embedded" class="history-heading">
       <div>
         <p class="eyebrow">{{ t('history.title') }}</p>
         <h3>{{ resource.name }}</h3>

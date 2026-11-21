@@ -127,13 +127,15 @@ describe('localized records and permissions', () => {
 
     expect(wrapper.text()).toContain('У вас доступ только для чтения')
     expect(wrapper.find('.record-controls .primary-button').exists()).toBe(false)
-    expect(wrapper.find('.record-action-cell').exists()).toBe(false)
+    expect(wrapper.find('.record-action-cell').exists()).toBe(true)
+    expect(wrapper.get('.record-actions-empty').attributes('aria-label')).toBe('Нет доступных действий')
 
     await switchToEnglish(wrapper)
 
     expect(wrapper.text()).toContain('You have read-only access')
     expect(wrapper.find('.record-controls .primary-button').exists()).toBe(false)
-    expect(wrapper.find('.record-action-cell').exists()).toBe(false)
+    expect(wrapper.find('.record-action-cell').exists()).toBe(true)
+    expect(wrapper.get('.record-actions-empty').attributes('aria-label')).toBe('No available actions')
     expect(wrapper.text()).not.toContain('Create record')
     wrapper.unmount()
   })

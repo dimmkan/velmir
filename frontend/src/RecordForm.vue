@@ -44,12 +44,14 @@ const props = withDefaults(defineProps<{
   record?: RecordRow
   updateAllowed?: boolean
   writeEnabled?: boolean
-}>(), { updateAllowed: true, writeEnabled: false })
+  embedded?: boolean
+}>(), { updateAllowed: true, writeEnabled: false, embedded: false })
 const emit = defineEmits<{
   saved: [record: RecordRow]
   'audit-failed': [record: RecordRow | null]
   cancel: []
   'dirty-change': [dirty: boolean]
+  'state-change': [state: { dirty: boolean; saving: boolean; readOnly: boolean; createImpossible: boolean }]
 }>()
 
 const { t, locale } = useI18n()
@@ -240,7 +242,7 @@ function relationError(relation: RelationView): string {
 }
 
 async function save() {
-  if (formReadOnly.value || createImpossible.value) return
+  if (saving.value || formReadOnly.value || createImpossible.value) return
   serverError.value = ''
   serverErrorCode.value = ''
   serverErrorStatus.value = 0
@@ -296,6 +298,10 @@ function beforeUnload(event: BeforeUnloadEvent) {
 
 watch(() => [props.mode, props.resource, props.record], resetForm, { immediate: true })
 watch(dirty, (value) => emit('dirty-change', value), { immediate: true })
+watch([dirty, saving, formReadOnly, createImpossible], ([isDirty, isSaving, readOnly, impossible]) => {
+  emit('state-change', { dirty: isDirty, saving: isSaving, readOnly, createImpossible: impossible })
+}, { immediate: true })
+defineExpose({ save, cancel })
 onMounted(() => window.addEventListener('beforeunload', beforeUnload))
 onBeforeUnmount(() => {
   window.removeEventListener('beforeunload', beforeUnload)
@@ -309,7 +315,7 @@ function baseType(dataType: string): string {
 
 <template>
   <section class="record-form-panel" :aria-label="t(mode === 'create' ? 'records.create' : formReadOnly ? 'common.view' : 'records.edit')">
-    <div class="record-form-heading">
+    <div v-if="!embedded" class="record-form-heading">
       <div>
         <p class="eyebrow">{{ t(mode === 'create' ? 'records.new' : formReadOnly ? 'common.view' : 'records.edit') }}</p>
         <h3>{{ resource.name }}</h3>
@@ -442,7 +448,7 @@ function baseType(dataType: string): string {
         </div>
       </template>
 
-      <div class="record-form-actions">
+      <div v-if="!embedded" class="record-form-actions">
         <button v-if="!formReadOnly" type="submit" class="primary-button" :disabled="saving || (mode === 'edit' && !dirty)">
           {{ saving ? t('records.saving') : t(mode === 'create' ? 'records.create' : 'records.save') }}
         </button>

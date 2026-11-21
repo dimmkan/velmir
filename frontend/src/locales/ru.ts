@@ -25,6 +25,13 @@ export default {
   navigation: {
     administration: 'Администрирование',
     resources: 'Ресурсы базы данных',
+    serviceSection: 'Служебный раздел',
+    collapseSidebar: 'Скрыть боковую панель',
+    expandSidebar: 'Показать боковую панель',
+    openSidebar: 'Открыть навигацию',
+    closeSidebar: 'Закрыть навигацию',
+    collapseSchema: 'Свернуть ресурсы схемы {schema}',
+    expandSchema: 'Развернуть ресурсы схемы {schema}',
   },
   readiness: {
     label: 'Готовность инфраструктуры',
@@ -84,6 +91,8 @@ export default {
     empty: 'Записи не найдены',
     emptyHint: 'Попробуйте другую страницу, поисковый запрос или фильтр.',
     actions: 'Действия',
+    recordActions: 'Действия с записью',
+    noActions: 'Нет доступных действий',
     rowsPerPage: 'Строк на странице',
     page: 'Страница {page}',
     previous: 'Назад',
@@ -279,6 +288,9 @@ export default {
     roleRemoved: 'Роль удалена.',
     roleCreated: 'Пользовательская роль создана.',
     roleUpdated: 'Роль и permissions обновлены. Изменения применяются к следующим запросам.',
+    configurePermissions: 'Настроить права',
+    permissionsTitle: 'Права роли {name}',
+    noRole: 'Нет назначенных ролей',
   },
   permissions: {
     schema: 'Схема',

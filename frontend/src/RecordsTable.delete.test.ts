@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
+import { DOMWrapper, flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import RecordsTable from './RecordsTable.vue'
 import { createVelmirI18n } from './i18n'
@@ -37,7 +37,7 @@ function deleteResponse(body: unknown = null, status = 204) {
 
 const wrappers: VueWrapper[] = []
 
-async function mountTable(fetchMock: ReturnType<typeof vi.fn>, overrides: Record<string, unknown> = {}, metadata = resource) {
+async function mountTable(overrides: Record<string, unknown> = {}, metadata = resource) {
   const i18n = createVelmirI18n()
   const wrapper = mount(RecordsTable, {
     attachTo: document.body,
@@ -53,9 +53,17 @@ async function mountTable(fetchMock: ReturnType<typeof vi.fn>, overrides: Record
   return { wrapper, i18n }
 }
 
+function element<T extends HTMLElement = HTMLElement>(selector: string): DOMWrapper<T> {
+  const found = document.querySelector<T>(selector)
+  if (!found) throw new Error(`Missing element: ${selector}`)
+  return new DOMWrapper(found)
+}
+
 async function openDialog(wrapper: VueWrapper) {
-  await wrapper.get('.record-delete-button').trigger('click')
-  await nextTick()
+  await wrapper.get('.record-actions-trigger').trigger('click')
+  await flushPromises()
+  await element('.record-delete-button').trigger('click')
+  await flushPromises()
 }
 
 afterEach(() => {
@@ -70,26 +78,32 @@ describe('record deletion controls and confirmation', () => {
   it('shows delete only with permission, writer, a table and a primary key', async () => {
     for (const overrides of [{}, { deleteAllowed: false }, { writeEnabled: false }]) {
       vi.stubGlobal('fetch', vi.fn().mockResolvedValue(recordsResponse()))
-      const { wrapper } = await mountTable(fetch as ReturnType<typeof vi.fn>, overrides)
-      expect(wrapper.find('.record-delete-button').exists()).toBe(Object.keys(overrides).length === 0)
+      const { wrapper } = await mountTable(overrides)
+      await wrapper.get('.record-actions-trigger').trigger('click')
+      await flushPromises()
+      expect(document.querySelector('.record-delete-button') !== null).toBe(Object.keys(overrides).length === 0)
+      await wrapper.get('.record-actions-trigger').trigger('click')
     }
 
     const unsupportedResources: ResourceMetadata[] = [{ ...resource, kind: 'view' }, { ...resource, primary_key: [] }]
     for (const metadata of unsupportedResources) {
       vi.stubGlobal('fetch', vi.fn().mockResolvedValue(recordsResponse()))
-      const { wrapper } = await mountTable(fetch as ReturnType<typeof vi.fn>, {}, metadata)
-      expect(wrapper.find('.record-delete-button').exists()).toBe(false)
+      const { wrapper } = await mountTable({}, metadata)
+      await wrapper.get('.record-actions-trigger').trigger('click')
+      await flushPromises()
+      expect(document.querySelector('.record-delete-button')).toBeNull()
+      await wrapper.get('.record-actions-trigger').trigger('click')
     }
   })
 
   it('opens an accessible composite-key dialog, traps focus and closes with Escape without DELETE', async () => {
     const fetchMock = vi.fn().mockResolvedValue(recordsResponse([{ tenant_id: '7', id: '9', name: 'Composite' }]))
     vi.stubGlobal('fetch', fetchMock)
-    const { wrapper } = await mountTable(fetchMock, {}, compositeResource)
-    const trigger = wrapper.get('.record-delete-button')
+    const { wrapper } = await mountTable({}, compositeResource)
+    const trigger = wrapper.get('.record-actions-trigger')
     await openDialog(wrapper)
 
-    const dialog = wrapper.get('[role="dialog"]')
+    const dialog = element('[role="dialog"]')
     expect(dialog.attributes('aria-modal')).toBe('true')
     expect(dialog.attributes('aria-label')).toBe('Подтверждение удаления записи')
     expect(dialog.text()).toContain('public.links')
@@ -97,12 +111,14 @@ describe('record deletion controls and confirmation', () => {
     expect(dialog.text()).toContain('необратимо')
     expect(document.activeElement?.textContent).toBe('Отмена')
 
+    element<HTMLButtonElement>('.modal-close').element.focus()
     await dialog.trigger('keydown', { key: 'Tab', shiftKey: true })
     expect(document.activeElement?.textContent).toBe('Удалить безвозвратно')
     await dialog.trigger('keydown', { key: 'Tab' })
-    expect(document.activeElement?.textContent).toBe('Отмена')
+    expect(document.activeElement).toBe(element('.modal-close').element)
     await dialog.trigger('keydown', { key: 'Escape' })
-    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+    await flushPromises()
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
     expect(document.activeElement).toBe(trigger.element)
     expect(fetchMock.mock.calls.filter(([, options]) => options?.method === 'DELETE')).toHaveLength(0)
   })
@@ -116,18 +132,19 @@ describe('record deletion controls and confirmation', () => {
       }))
       .mockResolvedValue(recordsResponse([]))
     vi.stubGlobal('fetch', fetchMock)
-    const { wrapper } = await mountTable(fetchMock)
+    const { wrapper } = await mountTable()
     await openDialog(wrapper)
-    const confirm = wrapper.get('.delete-dialog .danger-button')
+    const confirm = element('.delete-dialog .danger-button')
     await confirm.trigger('click')
+    await nextTick()
     expect(confirm.attributes('disabled')).toBeDefined()
-    expect(wrapper.get('.delete-dialog').text()).toContain('Удаление…')
+    expect(element('.delete-dialog').text()).toContain('Удаление…')
     await confirm.trigger('click')
     expect(fetchMock.mock.calls.filter(([, options]) => options?.method === 'DELETE')).toHaveLength(1)
 
     finishDelete?.()
     await flushPromises()
-    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
     expect(wrapper.get('.delete-success').text()).toBe('Запись успешно удалена.')
     expect(wrapper.text()).not.toContain('Before')
     expect(fetchMock).toHaveBeenCalledTimes(3)
@@ -140,9 +157,9 @@ describe('record deletion controls and confirmation', () => {
       .mockResolvedValueOnce(deleteResponse())
       .mockResolvedValue(recordsResponse([{ id: '0', name: 'Previous page' }], 1))
     vi.stubGlobal('fetch', fetchMock)
-    const { wrapper } = await mountTable(fetchMock)
+    const { wrapper } = await mountTable()
     await openDialog(wrapper)
-    await wrapper.get('.delete-dialog .danger-button').trigger('click')
+    await element('.delete-dialog .danger-button').trigger('click')
     await flushPromises()
 
     expect(new URLSearchParams(window.location.search).get('page')).toBe('1')
@@ -162,13 +179,13 @@ describe('record deletion failures', () => {
       .mockResolvedValueOnce(recordsResponse())
       .mockResolvedValue(deleteResponse({ error: { code, message: 'Server message' } }, status))
     vi.stubGlobal('fetch', fetchMock)
-    const { wrapper } = await mountTable(fetchMock)
+    const { wrapper } = await mountTable()
     await openDialog(wrapper)
-    await wrapper.get('.delete-dialog .danger-button').trigger('click')
+    await element('.delete-dialog .danger-button').trigger('click')
     await flushPromises()
 
-    expect(wrapper.get('.delete-error').text()).toContain(message)
-    expect(wrapper.find('[role="dialog"]').exists()).toBe(true)
+    expect(element('.delete-error').text()).toContain(message)
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull()
     expect(fetchMock.mock.calls.filter(([, options]) => options?.method === 'DELETE')).toHaveLength(1)
     expect(wrapper.find('.delete-success').exists()).toBe(false)
   })
@@ -179,13 +196,13 @@ describe('record deletion failures', () => {
       .mockResolvedValueOnce(deleteResponse({ error: { code: 'AUDIT_WRITE_FAILED', message: 'Audit failed', mutation_committed: true } }, 500))
       .mockResolvedValue(recordsResponse([]))
     vi.stubGlobal('fetch', fetchMock)
-    const { wrapper, i18n } = await mountTable(fetchMock)
+    const { wrapper, i18n } = await mountTable()
     await openDialog(wrapper)
-    await wrapper.get('.delete-dialog .danger-button').trigger('click')
+    await element('.delete-dialog .danger-button').trigger('click')
     await flushPromises()
 
     expect(wrapper.get('.audit-warning').text()).toContain('Запись удалена, но событие истории могло не записаться')
-    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
     expect(wrapper.find('.delete-success').exists()).toBe(false)
     expect(fetchMock.mock.calls.filter(([, options]) => options?.method === 'DELETE')).toHaveLength(1)
 
@@ -200,14 +217,14 @@ describe('record deletion failures', () => {
   it('switches confirmation language without submitting DELETE', async () => {
     const fetchMock = vi.fn().mockResolvedValue(recordsResponse())
     vi.stubGlobal('fetch', fetchMock)
-    const { wrapper, i18n } = await mountTable(fetchMock)
+    const { wrapper, i18n } = await mountTable()
     await openDialog(wrapper)
     i18n.global.locale.value = 'en'
     await nextTick()
 
-    expect(wrapper.get('[role="dialog"]').text()).toContain('Delete this record?')
-    expect(wrapper.get('[role="dialog"]').text()).toContain('This action is irreversible')
-    expect(wrapper.get('[role="dialog"]').attributes('aria-label')).toBe('Confirm record deletion')
+    expect(element('[role="dialog"]').text()).toContain('Delete this record?')
+    expect(element('[role="dialog"]').text()).toContain('This action is irreversible')
+    expect(element('[role="dialog"]').attributes('aria-label')).toBe('Confirm record deletion')
     expect(fetchMock.mock.calls.filter(([, options]) => options?.method === 'DELETE')).toHaveLength(0)
   })
 })

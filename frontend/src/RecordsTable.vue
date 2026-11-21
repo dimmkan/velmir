@@ -18,9 +18,10 @@ import {
   type RecordsResponse,
 } from './records'
 import { readableColumns, type ResourceMetadata, type SchemaMetadata } from './schema'
-import RecordForm from './RecordForm.vue'
-import RecordHistory from './RecordHistory.vue'
+import RecordFormModal from './RecordFormModal.vue'
+import RecordHistoryModal from './RecordHistoryModal.vue'
 import RecordDeleteDialog from './RecordDeleteDialog.vue'
+import RecordActionsMenu from './RecordActionsMenu.vue'
 import { canCreateRecord, canUpdateRecord, type FormMode } from './recordForm'
 import { buildRecordKey, deleteRecord, MutationRequestError } from './mutations'
 import type { RecordRow } from './records'
@@ -154,8 +155,7 @@ const deleteTargetKey = computed(() =>
   deleteTarget.value ? buildRecordKey(props.resource, deleteTarget.value) : '',
 )
 
-function openDeleteDialog(record: RecordRow, event: Event) {
-  if (event.currentTarget instanceof HTMLElement) event.currentTarget.focus()
+function openDeleteDialog(record: RecordRow) {
   closeForm()
   historyKey.value = ''
   auditWarning.value = ''
@@ -387,7 +387,7 @@ onBeforeUnmount(() => {
       </p>
     </div>
 
-    <RecordForm
+    <RecordFormModal
       v-if="formMode"
       :backend-base-u-r-l="backendBaseURL"
       :schema-name="schemaName"
@@ -399,7 +399,7 @@ onBeforeUnmount(() => {
       :write-enabled="writeEnabled"
       @saved="recordSaved"
       @audit-failed="recordAuditFailed"
-      @cancel="closeForm"
+      @close="closeForm"
       @dirty-change="emit('dirty-change', $event)"
     />
 
@@ -421,7 +421,7 @@ onBeforeUnmount(() => {
       <button type="button" class="secondary-button" :disabled="loading" @click="loadRecords">{{ t('history.refreshRecords') }}</button>
     </div>
 
-    <RecordHistory
+    <RecordHistoryModal
       v-if="historyKey"
       :backend-base-u-r-l="backendBaseURL"
       :schema-name="schemaName"
@@ -512,7 +512,7 @@ onBeforeUnmount(() => {
               <span v-else>{{ column.name }}</span>
               <small>{{ column.data_type }}</small>
             </th>
-            <th v-if="canUpdate || canViewDetails || canViewHistory || canDelete">{{ t('records.actions') }}</th>
+            <th class="record-actions-heading">{{ t('records.actions') }}</th>
           </tr>
         </thead>
         <tbody>
@@ -541,18 +541,16 @@ onBeforeUnmount(() => {
               </div>
               <template v-else>{{ formatRecordValue(record[column.name], column.data_type, locale) }}</template>
             </td>
-            <td v-if="canUpdate || canViewDetails || canViewHistory || canDelete" class="record-action-cell">
-              <div class="record-row-actions">
-                <button v-if="canUpdate || canViewDetails" type="button" class="secondary-button record-details-button" @click="openEditForm(record)">{{ t(canUpdate ? 'common.edit' : 'common.view') }}</button>
-                <button v-if="canViewHistory" type="button" class="secondary-button" @click="openHistory(record)">{{ t('history.open') }}</button>
-                <button
-                  v-if="canDelete"
-                  type="button"
-                  class="danger-button record-delete-button"
-                  :aria-label="t('records.delete.recordLabel', { key: buildRecordKey(resource, record) })"
-                  @click="openDeleteDialog(record, $event)"
-                >{{ t('records.delete.action') }}</button>
-              </div>
+            <td class="record-action-cell">
+              <RecordActionsMenu
+                :can-edit="canUpdate"
+                :can-view="canViewDetails"
+                :can-history="canViewHistory"
+                :can-delete="canDelete"
+                @edit="openEditForm(record)"
+                @history="openHistory(record)"
+                @delete="openDeleteDialog(record)"
+              />
             </td>
           </tr>
         </tbody>

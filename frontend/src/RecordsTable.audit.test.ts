@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { flushPromises, mount } from '@vue/test-utils'
+import { DOMWrapper, flushPromises, mount } from '@vue/test-utils'
 import RecordsTable from './RecordsTable.vue'
 import { createVelmirI18n } from './i18n'
 import type { ResourceMetadata } from './schema'
@@ -21,6 +21,7 @@ describe('records audit failure', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
     window.history.replaceState({}, '', '/')
+    document.body.innerHTML = ''
   })
 
   it('shows a committed warning, refreshes data and never automatically retries POST', async () => {
@@ -33,6 +34,7 @@ describe('records audit failure', () => {
       .mockResolvedValue(recordsResponse('Committed'))
     vi.stubGlobal('fetch', fetchMock)
     const wrapper = mount(RecordsTable, {
+      attachTo: document.body,
       props: {
         backendBaseURL: '', schemaName: 'public', resource, writeEnabled: true,
         readAllowed: true, createAllowed: true, updateAllowed: true, deleteAllowed: false,
@@ -41,8 +43,11 @@ describe('records audit failure', () => {
     })
     await flushPromises()
     await wrapper.get('.record-controls .primary-button').trigger('click')
-    await wrapper.get('#field-name').setValue('Committed')
-    await wrapper.get('form.record-form').trigger('submit.prevent')
+    await flushPromises()
+    const field = document.querySelector<HTMLInputElement>('#field-name')!
+    const form = document.querySelector<HTMLFormElement>('form.record-form')!
+    await new DOMWrapper(field).setValue('Committed')
+    await new DOMWrapper(form).trigger('submit.prevent')
     await flushPromises()
 
     expect(wrapper.find('.audit-warning').exists()).toBe(true)

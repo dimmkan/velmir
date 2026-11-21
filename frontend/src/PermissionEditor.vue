@@ -140,7 +140,7 @@ function removePermission(index: number) {
         </label>
       </fieldset>
 
-      <template v-if="permission.schema !== '*' || permission.resource !== '*'">
+      <div v-if="permission.schema !== '*' || permission.resource !== '*'" class="permission-fields">
         <fieldset
           v-for="action in fieldActions.filter((item) => permission.operations.includes(item))"
           :key="action"
@@ -191,7 +191,7 @@ function removePermission(index: number) {
             >{{ t(action === 'read' ? 'permissions.primaryKeyOnly' : 'permissions.emptyAllowlistWarning') }}</p>
           </template>
         </fieldset>
-      </template>
+      </div>
       <p v-else class="wildcard-field-note">{{ t('permissions.wildcardUnrestricted') }}</p>
 
       <button type="button" class="danger-button" :disabled="disabled" @click="removePermission(index)">{{ t('permissions.remove') }}</button>

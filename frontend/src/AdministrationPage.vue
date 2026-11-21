@@ -18,6 +18,7 @@ import {
   type UserForm,
 } from './admin'
 import PermissionEditor from './PermissionEditor.vue'
+import BaseModal from './BaseModal.vue'
 import type { SchemaMetadata } from './schema'
 
 const props = withDefaults(defineProps<{ backendBaseURL: string; schemas?: SchemaMetadata[] }>(), { schemas: () => [] })
@@ -195,7 +196,7 @@ async function submitRole() {
 }
 
 async function saveRole() {
-  if (!selectedRole.value) return
+  if (operation.value || !selectedRole.value) return
   applyErrors(validateRoleForm(roleDraft), roleErrors)
   actionError.value = ''
   if (Object.keys(roleErrors).length > 0) return
@@ -236,7 +237,7 @@ onMounted(load)
     </div>
     <template v-else>
       <p v-if="notice" class="admin-notice" role="status">{{ t(notice) }}</p>
-      <p v-if="actionError" class="form-server-error" role="alert">{{ t(actionError) }}</p>
+      <p v-if="actionError && !selectedRole" class="form-server-error" role="alert">{{ t(actionError) }}</p>
 
       <div v-if="tab === 'users'" class="admin-stack">
         <form class="admin-panel admin-form" @submit.prevent="submitUser">
@@ -250,46 +251,48 @@ onMounted(load)
           <button type="submit" class="primary-button" :disabled="Boolean(operation)">{{ operation === 'create-user' ? t('administration.creating') : t('administration.createUser') }}</button>
         </form>
 
-        <div class="table-wrapper admin-table-wrapper">
-          <table>
-            <thead><tr><th>{{ t('administration.user') }}</th><th>{{ t('administration.status') }}</th><th>{{ t('administration.roles') }}</th><th>{{ t('administration.security') }}</th></tr></thead>
-            <tbody>
-              <tr v-for="user in users" :key="user.id">
-                <td>
-                  <strong>{{ user.email }}</strong>
-                  <div class="inline-field">
-                    <input v-model="displayDrafts[user.id]" :aria-label="t('administration.displayName')" :disabled="Boolean(operation)" />
-                    <button type="button" class="secondary-button light" :disabled="Boolean(operation)" @click="saveDisplayName(user)">{{ t('administration.saveName') }}</button>
-                  </div>
-                </td>
-                <td>
-                  <span :class="user.is_active ? 'active-state' : 'inactive-state'">{{ user.is_active ? t('administration.active') : t('administration.disabled') }}</span>
-                  <button
-                    type="button"
-                    class="secondary-button light status-action"
-                    :disabled="Boolean(operation) || (user.id === authState.user?.id && user.is_active)"
-                    :title="user.id === authState.user?.id && user.is_active ? t('administration.selfDisableHint') : ''"
-                    @click="toggleUser(user)"
-                  >{{ user.is_active ? t('administration.disable') : t('administration.enable') }}</button>
-                </td>
-                <td>
-                  <label v-for="role in roles" :key="role.id" class="role-checkbox">
-                    <input
-                      type="checkbox"
-                      :checked="user.roles.includes(role.name)"
-                      :disabled="Boolean(operation) || (user.id === authState.user?.id && role.name === 'admin')"
-                      @change="changeRole(user, role, ($event.target as HTMLInputElement).checked)"
-                    />
-                    {{ role.name }}
-                  </label>
-                </td>
-                <td>
-                  <label class="password-reset">{{ t('administration.newPassword') }}<input v-model="passwordDrafts[user.id]" type="password" autocomplete="new-password" :disabled="Boolean(operation)" /></label>
-                  <button type="button" class="secondary-button light" :disabled="Boolean(operation)" @click="resetPassword(user)">{{ t('administration.resetPassword') }}</button>
-                </td>
-              </tr>
-            </tbody>
-          </table>
+        <div class="user-list">
+          <article v-for="user in users" :key="user.id" class="user-row">
+            <section class="user-identity">
+              <span class="user-column-label">{{ t('administration.user') }}</span>
+              <strong class="user-email" :title="user.email">{{ user.email }}</strong>
+              <div class="inline-field">
+                <input v-model="displayDrafts[user.id]" :aria-label="t('administration.displayName')" :disabled="Boolean(operation)" />
+                <button type="button" class="secondary-button light" :disabled="Boolean(operation)" @click="saveDisplayName(user)">{{ t('administration.saveName') }}</button>
+              </div>
+            </section>
+            <section class="user-status">
+              <span class="user-column-label">{{ t('administration.status') }}</span>
+              <div class="user-status-line">
+                <span class="user-status-badge" :class="user.is_active ? 'active-state' : 'inactive-state'">{{ user.is_active ? t('administration.active') : t('administration.disabled') }}</span>
+                <button
+                  type="button"
+                  class="secondary-button light status-action"
+                  :disabled="Boolean(operation) || (user.id === authState.user?.id && user.is_active)"
+                  :title="user.id === authState.user?.id && user.is_active ? t('administration.selfDisableHint') : ''"
+                  @click="toggleUser(user)"
+                >{{ user.is_active ? t('administration.disable') : t('administration.enable') }}</button>
+              </div>
+            </section>
+            <section class="user-roles">
+              <span class="user-column-label">{{ t('administration.roles') }}</span>
+              <p v-if="user.roles.length === 0" class="no-role">{{ t('administration.noRole') }}</p>
+              <label v-for="role in roles" :key="role.id" class="role-checkbox">
+                <input
+                  type="checkbox"
+                  :checked="user.roles.includes(role.name)"
+                  :disabled="Boolean(operation) || (user.id === authState.user?.id && role.name === 'admin')"
+                  @change="changeRole(user, role, ($event.target as HTMLInputElement).checked)"
+                />
+                <span>{{ role.name }}</span>
+              </label>
+            </section>
+            <section class="user-security">
+              <span class="user-column-label">{{ t('administration.security') }}</span>
+              <label class="password-reset">{{ t('administration.newPassword') }}<input v-model="passwordDrafts[user.id]" type="password" autocomplete="new-password" :disabled="Boolean(operation)" /></label>
+              <button type="button" class="secondary-button light" :disabled="Boolean(operation)" @click="resetPassword(user)">{{ t('administration.resetPassword') }}</button>
+            </section>
+          </article>
         </div>
       </div>
 
@@ -300,7 +303,6 @@ onMounted(load)
             <label>{{ t('administration.name') }}<input v-model="newRole.name" placeholder="content_editor" :disabled="Boolean(operation)" /></label>
             <label>{{ t('administration.roleDescription') }}<input v-model="newRole.description" :disabled="Boolean(operation)" /></label>
           </div>
-          <PermissionEditor :permissions="newRole.permissions" :schemas="schemas" :disabled="Boolean(operation)" @change="newRole.permissions = $event" />
           <p v-for="(error, field) in roleErrors" :key="field" class="field-error" role="alert">{{ t(error) }}</p>
           <button type="submit" class="primary-button" :disabled="Boolean(operation)">{{ operation === 'create-role' ? t('administration.creating') : t('administration.createRoleAction') }}</button>
         </form>
@@ -315,21 +317,32 @@ onMounted(load)
                 <p>{{ role.description || t('administration.noDescription') }}</p>
                 <code>{{ t('administration.permissionEntries', { count: role.permissions.length }) }}</code>
               </div>
-              <button v-if="!role.is_system" type="button" class="secondary-button light" @click="selectRole(role.id)">{{ t('common.edit') }}</button>
+              <button v-if="!role.is_system" type="button" class="secondary-button light" @click="selectRole(role.id)">{{ t('administration.configurePermissions') }}</button>
             </article>
           </div>
         </div>
 
-        <form v-if="selectedRole" class="admin-panel admin-form" @submit.prevent="saveRole">
-          <h3>{{ t('administration.editRole', { name: selectedRole.name }) }}</h3>
-          <div class="admin-form-grid two-columns">
-            <label>{{ t('administration.name') }}<input v-model="roleDraft.name" :disabled="Boolean(operation)" /></label>
-            <label>{{ t('administration.roleDescription') }}<input v-model="roleDraft.description" :disabled="Boolean(operation)" /></label>
-          </div>
-          <PermissionEditor :permissions="roleDraft.permissions" :schemas="schemas" :disabled="Boolean(operation)" @change="roleDraft.permissions = $event" />
-          <p v-for="(error, field) in roleErrors" :key="field" class="field-error" role="alert">{{ t(error) }}</p>
-          <button type="submit" class="primary-button" :disabled="Boolean(operation)">{{ operation ? t('administration.saving') : t('administration.saveRole') }}</button>
-        </form>
+        <BaseModal
+          v-if="selectedRole"
+          :title="t('administration.permissionsTitle', { name: selectedRole.name })"
+          :pending="Boolean(operation)"
+          size="wide"
+          @close="selectedRoleID = null"
+        >
+          <form id="role-permissions-form" class="admin-form role-permissions-form" @submit.prevent="saveRole">
+            <div class="admin-form-grid two-columns">
+              <label>{{ t('administration.name') }}<input v-model="roleDraft.name" :disabled="Boolean(operation)" /></label>
+              <label>{{ t('administration.roleDescription') }}<input v-model="roleDraft.description" :disabled="Boolean(operation)" /></label>
+            </div>
+            <PermissionEditor :permissions="roleDraft.permissions" :schemas="schemas" :disabled="Boolean(operation)" @change="roleDraft.permissions = $event" />
+            <p v-if="actionError" class="form-server-error" role="alert">{{ t(actionError) }}</p>
+            <p v-for="(error, field) in roleErrors" :key="field" class="field-error" role="alert">{{ t(error) }}</p>
+          </form>
+          <template #footer>
+            <button type="button" class="secondary-button" :disabled="Boolean(operation)" @click="selectedRoleID = null">{{ t('common.close') }}</button>
+            <button type="button" class="primary-button" :disabled="Boolean(operation)" :aria-busy="Boolean(operation)" @click="saveRole">{{ operation ? t('administration.saving') : t('administration.saveRole') }}</button>
+          </template>
+        </BaseModal>
       </div>
     </template>
   </section>

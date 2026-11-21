@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { authState, can, initializeAuth, login, logout } from './auth'
 import LoginPage from './LoginPage.vue'
 import AdministrationPage from './AdministrationPage.vue'
 import RecordsTable from './RecordsTable.vue'
 import AppFooter from './AppFooter.vue'
-import { fetchReadiness, type DatabaseState, type ReadinessResponse } from './readiness'
+import { fetchReadiness, type ReadinessResponse } from './readiness'
 import {
   fetchSchema,
   SchemaRequestError,
@@ -64,14 +64,63 @@ function resourceKey(schema: string, resource: string) {
   return JSON.stringify([schema, resource])
 }
 
-function databaseStateLabel(state: DatabaseState | undefined) {
-  if (viewState.value === 'loading') return t('readiness.checking')
-  const keys: Record<DatabaseState, string> = {
-    ready: 'readiness.ready',
-    unavailable: 'readiness.unavailable',
-    not_configured: 'readiness.notConfigured',
+const SIDEBAR_STORAGE_KEY = 'velmir_sidebar_collapsed'
+const SCHEMAS_STORAGE_KEY = 'velmir_collapsed_schemas'
+const sidebarToggle = ref<HTMLButtonElement | null>(null)
+const mobileMenuButton = ref<HTMLButtonElement | null>(null)
+const sidebarCollapsed = ref(readStoredBoolean(SIDEBAR_STORAGE_KEY))
+const collapsedSchemas = ref<Record<string, boolean>>(readStoredSchemas())
+const mobileNavigationOpen = ref(false)
+
+function readStoredBoolean(key: string) {
+  try {
+    return window.localStorage.getItem(key) === 'true'
+  } catch {
+    return false
   }
-  return state ? t(keys[state]) : t('common.unknown')
+}
+
+function readStoredSchemas(): Record<string, boolean> {
+  try {
+    const value: unknown = JSON.parse(window.localStorage.getItem(SCHEMAS_STORAGE_KEY) ?? '{}')
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+    return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, boolean] => typeof entry[1] === 'boolean'))
+  } catch {
+    return {}
+  }
+}
+
+function toggleSidebar() {
+  sidebarCollapsed.value = !sidebarCollapsed.value
+  try {
+    window.localStorage.setItem(SIDEBAR_STORAGE_KEY, String(sidebarCollapsed.value))
+  } catch {
+    return
+  }
+}
+
+function toggleSchema(schemaName: string) {
+  collapsedSchemas.value = { ...collapsedSchemas.value, [schemaName]: !collapsedSchemas.value[schemaName] }
+  try {
+    window.localStorage.setItem(SCHEMAS_STORAGE_KEY, JSON.stringify(collapsedSchemas.value))
+  } catch {
+    return
+  }
+}
+
+async function openMobileNavigation() {
+  mobileNavigationOpen.value = true
+  await nextTick()
+  sidebarToggle.value?.focus()
+}
+
+function closeMobileNavigation(restoreFocus = false) {
+  mobileNavigationOpen.value = false
+  if (restoreFocus) void nextTick(() => mobileMenuButton.value?.focus())
+}
+
+function handleGlobalKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape' && mobileNavigationOpen.value) closeMobileNavigation(true)
 }
 
 async function loadReadiness() {
@@ -107,7 +156,7 @@ async function loadSchema() {
       schemaViewState.value = 'empty'
       return
     }
-    if (!restoreResourceFromURL()) {
+    if (applicationSection.value === 'resources' && !restoreResourceFromURL()) {
       selectResource(firstSchema.name, firstSchema.resources[0].name, false)
     }
     schemaViewState.value = 'ready'
@@ -142,6 +191,7 @@ function selectResource(schema: string, resource: string, push = true) {
   if (push && formDirty.value && selectedResourceKey.value !== resourceKey(schema, resource) && !window.confirm(t('records.confirmDiscard'))) return
   formDirty.value = false
   applicationSection.value = 'resources'
+  closeMobileNavigation()
   const url = new URL(window.location.href)
   url.pathname = '/'
   url.searchParams.set('schema', schema)
@@ -160,6 +210,7 @@ function showAdministration() {
   if (formDirty.value && !window.confirm(t('records.confirmDiscard'))) return
   formDirty.value = false
   applicationSection.value = 'administration'
+  closeMobileNavigation()
   window.history.pushState({}, '', '/administration')
 }
 
@@ -221,9 +272,13 @@ watch(() => authState.status, (status) => {
 
 onMounted(() => {
   window.addEventListener('popstate', handlePopState)
+  window.addEventListener('keydown', handleGlobalKeydown)
   void initialize()
 })
-onBeforeUnmount(() => window.removeEventListener('popstate', handlePopState))
+onBeforeUnmount(() => {
+  window.removeEventListener('popstate', handlePopState)
+  window.removeEventListener('keydown', handleGlobalKeydown)
+})
 </script>
 
 <template>
@@ -239,22 +294,50 @@ onBeforeUnmount(() => window.removeEventListener('popstate', handlePopState))
       <p>{{ t(authState.error) }}</p>
       <button type="button" class="primary-button" @click="initialize">{{ t('common.retry') }}</button>
     </main>
-    <div v-else class="app-layout">
-      <aside class="sidebar">
+    <div v-else class="app-layout" :class="{ 'sidebar-is-collapsed': sidebarCollapsed }">
+      <div class="mobile-topbar">
+        <button
+          ref="mobileMenuButton"
+          type="button"
+          class="mobile-menu-button"
+          :aria-label="t('navigation.openSidebar')"
+          aria-controls="application-sidebar"
+          :aria-expanded="mobileNavigationOpen"
+          @click="openMobileNavigation"
+        >
+          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" /></svg>
+        </button>
+        <img src="/brand/velmir-mark-dark.svg" alt="Velmir" />
+      </div>
+      <button
+        v-if="mobileNavigationOpen"
+        type="button"
+        class="sidebar-backdrop"
+        :aria-label="t('navigation.closeSidebar')"
+        @click="closeMobileNavigation(true)"
+      />
+      <aside
+        id="application-sidebar"
+        class="sidebar"
+        :class="{ collapsed: sidebarCollapsed, 'mobile-open': mobileNavigationOpen }"
+      >
         <div class="brand">
           <img class="brand-logo" src="/brand/velmir-logo-compact-dark.svg" alt="Velmir" />
           <img class="brand-mark" src="/brand/velmir-mark-dark.svg" alt="Velmir" />
+          <button
+            ref="sidebarToggle"
+            type="button"
+            class="sidebar-toggle"
+            aria-controls="sidebar-content"
+            :aria-expanded="mobileNavigationOpen ? true : !sidebarCollapsed"
+            :aria-label="t(mobileNavigationOpen ? 'navigation.closeSidebar' : sidebarCollapsed ? 'navigation.expandSidebar' : 'navigation.collapseSidebar')"
+            @click="mobileNavigationOpen ? closeMobileNavigation(true) : toggleSidebar()"
+          >
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" :class="{ reversed: sidebarCollapsed }"><path d="m14 6-6 6 6 6M8 12h12M4 5v14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg>
+          </button>
         </div>
 
-        <div class="sidebar-content">
-          <nav v-if="authState.can_admin" :aria-label="t('navigation.administration')" class="administration-nav">
-            <button
-              type="button"
-              class="resource-link"
-              :class="{ active: applicationSection === 'administration' }"
-              @click="showAdministration"
-            >{{ t('navigation.administration') }}</button>
-          </nav>
+        <div id="sidebar-content" class="sidebar-content">
           <p v-if="schemaViewState === 'loading'" class="sidebar-message">{{ t('records.loadingSchema') }}</p>
           <div v-else-if="schemaViewState === 'not_configured'" class="sidebar-message">
             {{ t('records.targetNotConfigured') }}
@@ -270,20 +353,46 @@ onBeforeUnmount(() => window.removeEventListener('popstate', handlePopState))
             <button type="button" class="secondary-button" @click="loadSchema">{{ t('common.retry') }}</button>
           </div>
           <nav v-else :aria-label="t('navigation.resources')">
-            <section v-for="schema in catalog?.schemas" :key="schema.name" class="schema-group">
-              <h2>{{ schema.name }}</h2>
-              <button
-                v-for="resource in schema.resources"
-                :key="resource.name"
-                type="button"
-                class="resource-link"
-                :class="{ active: selectedResourceKey === resourceKey(schema.name, resource.name) }"
-                @click="selectResource(schema.name, resource.name)"
-              >
-                <span>{{ resource.name }}</span>
-                <span class="resource-kind">{{ resource.kind }}</span>
-              </button>
+            <section v-for="(schema, schemaIndex) in catalog?.schemas" :key="schema.name" class="schema-group">
+              <div class="schema-heading">
+                <h2 :id="`schema-title-${schemaIndex}`">{{ schema.name }}</h2>
+                <button
+                  type="button"
+                  class="schema-toggle"
+                  :aria-label="t(collapsedSchemas[schema.name] ? 'navigation.expandSchema' : 'navigation.collapseSchema', { schema: schema.name })"
+                  :aria-expanded="!collapsedSchemas[schema.name]"
+                  :aria-controls="`schema-resources-${schemaIndex}`"
+                  @click="toggleSchema(schema.name)"
+                >
+                  <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" :class="{ collapsed: collapsedSchemas[schema.name] }"><path d="m5 7 5 5 5-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg>
+                </button>
+              </div>
+              <div v-show="!collapsedSchemas[schema.name]" :id="`schema-resources-${schemaIndex}`" :aria-labelledby="`schema-title-${schemaIndex}`">
+                <button
+                  v-for="resource in schema.resources"
+                  :key="resource.name"
+                  type="button"
+                  class="resource-link"
+                  :class="{ active: selectedResourceKey === resourceKey(schema.name, resource.name) }"
+                  @click="selectResource(schema.name, resource.name)"
+                >
+                  <span>{{ resource.name }}</span>
+                  <span class="resource-kind">{{ resource.kind }}</span>
+                </button>
+              </div>
             </section>
+          </nav>
+          <nav v-if="authState.can_admin" :aria-label="t('navigation.administration')" class="administration-nav">
+            <span class="administration-label">{{ t('navigation.serviceSection') }}</span>
+            <button
+              type="button"
+              class="resource-link administration-link"
+              :class="{ active: applicationSection === 'administration' }"
+              @click="showAdministration"
+            >
+              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 3 4 7v5c0 4.5 3.4 7.8 8 9 4.6-1.2 8-4.5 8-9V7l-8-4Z M9 12l2 2 4-4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></svg>
+              <span>{{ t('navigation.administration') }}</span>
+            </button>
           </nav>
         </div>
 
@@ -295,33 +404,9 @@ onBeforeUnmount(() => window.removeEventListener('popstate', handlePopState))
             {{ authState.logoutPending ? t('auth.signingOut') : t('auth.signOut') }}
           </button>
         </section>
-
-        <section class="readiness" :aria-label="t('readiness.label')">
-          <div>
-            <span>{{ t('readiness.backend') }}</span>
-            <strong :class="`status-${viewState === 'error' ? 'unavailable' : viewState}`">
-              {{ viewState === 'loading' ? t('readiness.checking') : viewState === 'error' ? t('readiness.unavailable') : t('readiness.available') }}
-            </strong>
-          </div>
-          <div>
-            <span>{{ t('readiness.adminDatabase') }}</span>
-            <strong :class="`status-${readiness?.admin_database ?? viewState}`">
-              {{ databaseStateLabel(readiness?.admin_database) }}
-            </strong>
-          </div>
-          <div>
-            <span>{{ t('readiness.targetDatabase') }}</span>
-            <strong :class="`status-${readiness?.target_database ?? viewState}`">
-              {{ databaseStateLabel(readiness?.target_database) }}
-            </strong>
-          </div>
-          <button v-if="viewState === 'error'" type="button" class="readiness-retry" @click="loadReadiness">
-            {{ t('readiness.retry') }}
-          </button>
-        </section>
       </aside>
 
-      <main class="content">
+      <main class="content" :class="{ 'content-records': applicationSection === 'resources' }" :inert="mobileNavigationOpen ? true : undefined">
         <AdministrationPage
           v-if="applicationSection === 'administration' && authState.can_admin"
           :backend-base-u-r-l="backendBaseURL"
@@ -367,6 +452,6 @@ onBeforeUnmount(() => window.removeEventListener('popstate', handlePopState))
         </section>
       </main>
     </div>
-    <AppFooter />
+    <AppFooter :view-state="viewState" :readiness="readiness" @retry="loadReadiness" />
   </div>
 </template>

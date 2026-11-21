@@ -25,6 +25,13 @@ export default {
   navigation: {
     administration: 'Administration',
     resources: 'Database resources',
+    serviceSection: 'Service section',
+    collapseSidebar: 'Collapse sidebar',
+    expandSidebar: 'Expand sidebar',
+    openSidebar: 'Open navigation',
+    closeSidebar: 'Close navigation',
+    collapseSchema: 'Collapse resources in schema {schema}',
+    expandSchema: 'Expand resources in schema {schema}',
   },
   readiness: {
     label: 'Infrastructure readiness',
@@ -84,6 +91,8 @@ export default {
     empty: 'No records found',
     emptyHint: 'Try another page, search term or filter.',
     actions: 'Actions',
+    recordActions: 'Record actions',
+    noActions: 'No available actions',
     rowsPerPage: 'Rows per page',
     page: 'Page {page}',
     previous: 'Previous',
@@ -279,6 +288,9 @@ export default {
     roleRemoved: 'Role removed.',
     roleCreated: 'Custom role created.',
     roleUpdated: 'Role and permissions updated. Changes apply to subsequent requests.',
+    configurePermissions: 'Configure permissions',
+    permissionsTitle: 'Permissions for role {name}',
+    noRole: 'No roles assigned',
   },
   permissions: {
     schema: 'Schema',
