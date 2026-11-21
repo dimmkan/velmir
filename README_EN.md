@@ -2,11 +2,13 @@
 
 [Русская версия](README.md)
 
-Velmir is a metadata-driven PostgreSQL admin panel. The current stage provides schema introspection, universal record lists with pagination, sorting, search and typed filters, related labels, automatic forms with many-to-one relation selectors, read-only one-to-many panels and a basic many-to-many editor through junction tables, confirmed record deletion, change history for changes made through Velmir, server-side session authentication, RBAC and user/role management UI. Nested mutations, files and automation are not implemented.
+**[Complete installation and setup guide](docs/setup-guide.en.md)** — demo, production HTTP/HTTPS, Docker secrets, backup/restore, upgrade, and troubleshooting.
+
+Velmir is a metadata-driven PostgreSQL admin panel. The current stage provides schema introspection, universal record lists with pagination, sorting, search and typed filters, related labels, automatic forms with many-to-one relation selectors, read-only one-to-many panels and a basic many-to-many editor through junction tables, confirmed record deletion, change history for changes made through Velmir, server-side session authentication, RBAC and user/role management UI. The current admin schema version is **Goose 9**. Nested mutations, files, visual schema editing, flows, webhooks, GraphQL and automation are not implemented.
 
 ## Requirements
 
-- Go **1.26.0** (see `backend/go.mod`)
+- Go **1.26.11** (see `backend/go.mod`)
 - Node.js and npm
 - Docker with Docker Compose
 
@@ -195,7 +197,7 @@ docker compose exec -T admin-db ls -l /backups
 docker compose exec -T admin-db ls -l /backups
 ```
 
-For demo in PowerShell, first set `$env:COMPOSE_FILE = "docker-compose.yml;docker-compose.demo.yml"`; in shell use `COMPOSE_FILE=docker-compose.yml:docker-compose.demo.yml`. Never redirect `.dump` through `>`: PowerShell redirection can corrupt binary data. Use `docker cp` for external archiving rather than text redirection. Backup files never enter Git or the image.
+For demo in PowerShell, first set `$env:COMPOSE_FILE = "docker-compose.yml;docker-compose.demo.yml"`. In a Linux/macOS shell, use `COMPOSE_FILE=docker-compose.yml:docker-compose.demo.yml`; in Windows Git Bash, use `COMPOSE_FILE='docker-compose.yml;docker-compose.demo.yml'` because Docker Compose is a Windows binary. Never redirect `.dump` through `>`: PowerShell redirection can corrupt binary data. Use `docker cp` for external archiving rather than text redirection. Backup files never enter Git or the image.
 
 ### Restore and verification
 

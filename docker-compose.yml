@@ -55,7 +55,7 @@ x-app-service: &app-service
 
 services:
   admin-db:
-    image: postgres:16-alpine
+    image: postgres:16-trixie
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-}

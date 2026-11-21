@@ -1,9 +1,9 @@
 module velmir/backend
 
-go 1.26.0
+go 1.26.11
 
 require (
-	github.com/go-chi/chi/v5 v5.2.3
+	github.com/go-chi/chi/v5 v5.4.0
 	github.com/jackc/pgx/v5 v5.13.0
 	github.com/joho/godotenv v1.5.1
 	github.com/pressly/goose/v3 v3.30.0

@@ -2,11 +2,13 @@
 
 [English version](README_EN.md)
 
-Velmir — панель администрирования PostgreSQL, управляемая метаданными. На текущем этапе реализованы introspection схемы, универсальные списки записей с пагинацией, сортировкой, поиском и типизированными фильтрами, related labels, автоматические формы создания и редактирования с many-to-one relation selectors, read-only one-to-many panels и базовый many-to-many editor через junction tables, удаление записей с подтверждением, история изменений через Velmir, аутентификация с серверными сессиями, RBAC и управление пользователями и ролями через UI. Nested mutations, файлы и автоматизация пока не реализованы.
+**[Полное руководство по установке и запуску](docs/setup-guide.ru.md)** — demo, production HTTP/HTTPS, Docker secrets, backup/restore, upgrade и troubleshooting.
+
+Velmir — панель администрирования PostgreSQL, управляемая метаданными. На текущем этапе реализованы introspection схемы, универсальные списки записей с пагинацией, сортировкой, поиском и типизированными фильтрами, related labels, автоматические формы создания и редактирования с many-to-one relation selectors, read-only one-to-many panels и базовый many-to-many editor через junction tables, удаление записей с подтверждением, история изменений через Velmir, аутентификация с серверными сессиями, RBAC и управление пользователями и ролями через UI. Актуальная admin schema version — **Goose 9**. Nested mutations, файлы, визуальное редактирование схемы, flows, webhooks, GraphQL и автоматизация пока не реализованы.
 
 ## Требования
 
-- Go **1.26.0** (см. `backend/go.mod`)
+- Go **1.26.11** (см. `backend/go.mod`)
 - Node.js и npm
 - Docker с Docker Compose
 
@@ -195,7 +197,7 @@ docker compose exec -T admin-db ls -l /backups
 docker compose exec -T admin-db ls -l /backups
 ```
 
-Для demo в PowerShell предварительно задайте `$env:COMPOSE_FILE = "docker-compose.yml;docker-compose.demo.yml"`, в shell — `COMPOSE_FILE=docker-compose.yml:docker-compose.demo.yml`. Не перенаправляйте `.dump` через `>`: это может повредить binary в PowerShell. Для внешнего архивирования используйте `docker cp`, а не text redirection. Backup files не попадают в Git/image.
+Для demo в PowerShell предварительно задайте `$env:COMPOSE_FILE = "docker-compose.yml;docker-compose.demo.yml"`. В Linux/macOS shell используйте `COMPOSE_FILE=docker-compose.yml:docker-compose.demo.yml`, а в Windows Git Bash — `COMPOSE_FILE='docker-compose.yml;docker-compose.demo.yml'`, поскольку Docker Compose является Windows binary. Не перенаправляйте `.dump` через `>`: это может повредить binary в PowerShell. Для внешнего архивирования используйте `docker cp`, а не text redirection. Backup files не попадают в Git/image.
 
 ### Restore и проверка
 

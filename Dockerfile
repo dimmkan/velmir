@@ -5,7 +5,7 @@ RUN npm ci
 COPY frontend/ ./
 RUN npm run type-check && npm run build
 
-FROM golang:1.26.0-alpine AS backend-build
+FROM golang:1.26.11-alpine AS backend-build
 WORKDIR /build/backend
 ENV CGO_ENABLED=0
 COPY backend/go.mod backend/go.sum ./
@@ -18,7 +18,7 @@ RUN go test ./... -timeout 60s && \
     go build -trimpath -ldflags="-s -w" -o /out/velmir-users ./cmd/users
 
 FROM alpine:3.22 AS runtime
-RUN apk add --no-cache ca-certificates && \
+RUN apk add --no-cache --upgrade ca-certificates zlib && \
     addgroup -S velmir && adduser -S -G velmir velmir
 WORKDIR /app
 COPY --from=backend-build /out/ /usr/local/bin/
