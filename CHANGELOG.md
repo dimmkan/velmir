@@ -1,44 +1,64 @@
-# Changelog
+# Список изменений
+
+## [0.1.0] - 2026-11-23
+
+### Добавлено
+
+- Компактная таблица записей с внутренней прокруткой, постоянно видимыми пагинацией и нижним колонтитулом.
+- Единое меню действий записи и модальные окна создания, редактирования, истории и настройки прав доступа.
+- Сворачиваемые списки схем и боковая панель с сохранением состояния.
+- Адаптивная компоновка пользователей и редактора прав доступа.
+- Интеграционная проверка чистой установки в production-окружении и идемпотентной инициализации.
+
+### Улучшено
+
+- Улучшены адаптивность, клавиатурная навигация, доступность и русская/английская локализация интерфейса.
+- Выделен служебный раздел администрирования.
+
+### Исправлено
+
+- Обеспечена совместимость правил сортировки административной базы данных с PostgreSQL 16 на Debian Trixie и glibc 2.41.
+- Исправлен прямой переход на страницу `/administration`.
 
 ## 0.1.0-rc.1 — 2026-11-21
 
-### Added
+### Добавлено
 
-- PostgreSQL schema introspection and metadata-driven resource lists with pagination, sorting, search, and typed filters.
-- Automatic create/update forms, confirmed deletion, related labels, many-to-one selectors, read-only one-to-many panels, and many-to-many editing through supported junction tables.
-- Server-side session authentication, user/role administration, resource/action RBAC, and independent field-level read/create/update permissions, including PK-only and write-only modes.
-- Audit history for successful create/update/delete operations performed through Velmir.
-- Russian and English UI, Velmir branding, logo, and favicons.
-- Admin database Goose migrations through version 9, including unrestricted read backfill for existing version-8 permissions.
+- Интроспекция схемы PostgreSQL и списки ресурсов на основе метаданных с пагинацией, сортировкой, поиском и типизированными фильтрами.
+- Автоматические формы создания и обновления, удаление с подтверждением, связанные метки, селекторы «многие к одному», панели «один ко многим» только для чтения и редактирование связей «многие ко многим» через поддерживаемые соединительные таблицы.
+- Аутентификация по серверным сессиям, администрирование пользователей и ролей, RBAC на уровне ресурсов и действий, а также независимые права на чтение, создание и обновление отдельных полей, включая режимы «только первичный ключ» и «только запись».
+- История аудита успешных операций создания, обновления и удаления, выполненных через Velmir.
+- Русскоязычный и англоязычный интерфейс, фирменный стиль Velmir, логотип и значки сайта.
+- Миграции Goose административной базы данных до версии 9 включительно, в том числе заполнение существующих прав версии 8 разрешением на неограниченное чтение.
 
-### Security
+### Безопасность
 
-- Argon2id password hashing, HttpOnly session cookies, CSRF validation, login rate limiting, secure production cookie requirements, and backend authorization.
-- Production rejection of missing, weak, and trivial bootstrap credentials; `admin/admin` remains limited to the explicit localhost demo.
-- Single `TARGET_DATABASE_URL` for separate read and mutation pools, with the read pool kept read-only and no automatic target DDL/GRANT.
-- CSP and other security headers, explicit trusted-proxy CIDRs, non-root containers, read-only app rootfs, dropped capabilities, and secret-file support.
-- Go toolchain updated to 1.26.11 and `chi/v5` updated to 5.4.0; runtime `zlib` is upgraded during the image build.
+- Хеширование паролей Argon2id, сессионные cookie с атрибутом HttpOnly, проверка CSRF, ограничение частоты попыток входа, требования к безопасным cookie в production-окружении и авторизация на серверной стороне.
+- Отклонение отсутствующих, слабых и тривиальных учётных данных начальной настройки в production-окружении; `admin/admin` остаётся доступным только в явно заданной локальной демонстрационной конфигурации.
+- Единый `TARGET_DATABASE_URL` для отдельных пулов чтения и изменения данных; пул чтения остаётся доступным только для чтения, автоматические DDL/GRANT в целевой базе данных не выполняются.
+- CSP и другие заголовки безопасности, явно задаваемые CIDR доверенных прокси, контейнеры без root, корневая файловая система приложения только для чтения, отключённые capabilities Linux и поддержка файлов секретов.
+- Инструментарий Go обновлён до версии 1.26.11, `chi/v5` — до 5.4.0; во время сборки образа обновляется используемая во время выполнения библиотека `zlib`.
 
-### Deployment
+### Развёртывание
 
-- Multi-stage production Docker image with compiled frontend, backend, migration/bootstrap/users CLIs, and healthchecks.
-- Compose modes for demo, production loopback HTTP, Caddy HTTPS, Docker secrets, and combined secrets/bootstrap/target/TLS operation.
-- Ordered migration and bootstrap jobs, named volumes, restart policies, resource limits, log rotation, and Caddy certificate persistence.
-- Shell and PowerShell admin backup/fresh-restore scripts; restore rejects an existing destination database and does not require a target DSN.
+- Многоэтапный production-образ Docker со скомпилированными фронтендом, бэкендом, CLI для миграций, начальной настройки и управления пользователями, а также проверками работоспособности.
+- Режимы Compose для демонстрации, production HTTP через loopback, HTTPS через Caddy, секретов Docker и комбинированной работы с секретами, начальной настройкой, целевой базой данных и TLS.
+- Упорядоченные задания миграции и начальной настройки, именованные тома, политики перезапуска, ограничения ресурсов, ротация журналов и сохранение сертификатов Caddy.
+- Сценарии Shell и PowerShell для резервного копирования административной базы данных и восстановления в чистую базу; восстановление отклоняет существующую базу назначения и не требует DSN целевой базы данных.
 
-### Documentation
+### Документация
 
-- API references in Russian and English.
-- Full standalone setup guides: [Russian](docs/setup-guide.ru.md) and [English](docs/setup-guide.en.md).
-- README quickstarts, environment reference, upgrade/rollback guidance, backup/restore instructions, and production security checklist.
+- Справочники API на русском и английском языках.
+- Полные автономные руководства по установке: [на русском](docs/setup-guide.ru.md) и [на английском](docs/setup-guide.en.md).
+- Быстрый старт в README, справочник переменных окружения, рекомендации по обновлению и откату, инструкции по резервному копированию и восстановлению, а также контрольный список безопасности production-окружения.
 
-### Known limitations
+### Известные ограничения
 
-- Nested mutations, files, visual schema editing, flows, webhooks, GraphQL, and automation are not implemented.
-- Audit covers changes made through Velmir only; target mutation and admin audit writes are not cross-database atomic.
-- Updates use last-write-wins semantics; optimistic locking and bulk deletion are unavailable.
-- Login rate limiting is process-local and is not synchronized across replicas.
-- Image rollback does not roll back database migrations; disaster recovery requires a separate fresh-database restore.
-- Public ACME issuance requires a real public domain and was not exercised by the local RC smoke checks.
-- Development-only npm audit findings remain in the test/type-check toolchain; production npm dependencies have no reported audit findings.
-- Исправлена совместимость collation admin-базы: PostgreSQL 16 закреплён на Debian Trixie с glibc 2.41.
+- Вложенные мутации, файлы, визуальное редактирование схемы, потоки операций, вебхуки, GraphQL и автоматизация не реализованы.
+- Аудит охватывает только изменения, выполненные через Velmir; изменение целевой базы и запись аудита в административную базу не являются атомарными между базами данных.
+- Обновления используют семантику «последняя запись побеждает»; оптимистичная блокировка и массовое удаление недоступны.
+- Ограничение частоты попыток входа действует в пределах процесса и не синхронизируется между репликами.
+- Откат образа не откатывает миграции базы данных; для аварийного восстановления требуется отдельное восстановление в чистую базу данных.
+- Публичный выпуск сертификатов ACME требует реального общедоступного домена и не проверялся локальными проверками работоспособности RC.
+- Предупреждения npm audit, относящиеся только к разработке, остаются в инструментах тестирования и проверки типов; в production-зависимостях npm выявленных проблем не зарегистрировано.
+- Исправлена совместимость правил сортировки административной базы данных: PostgreSQL 16 закреплён на Debian Trixie с glibc 2.41.
